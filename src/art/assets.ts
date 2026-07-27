@@ -3,6 +3,7 @@ import { bakeAnimals, type AnimalAssets } from './animals';
 import { bakeBuildings, type BuildingAssets } from './buildings';
 import { bakeCharacter, bakeNpc, bakeGun, bakeMuzzleFlash, HERO_SKIN, NPC_SKINS, ROGUE_SKIN, type CharacterAnims } from './character';
 import { bakeSlime, type SlimeAnims } from './creatures';
+import { bakeEmotes, type EmoteAssets } from './emote';
 import { bakeNature, type NatureAssets } from './nature';
 import { bakeProps, type PropAssets } from './props';
 import { P } from './palette';
@@ -19,8 +20,9 @@ export interface Assets {
   props: PropAssets;
   buildings: BuildingAssets;
   animals: AnimalAssets;
-  /** One idle/walk set per townsfolk skin. */
+  /** One idle/walk/work set per townsfolk skin. */
   npcs: CharacterAnims[];
+  emotes: EmoteAssets;
   /** name -> clip, used by the asset gallery screen. */
   gallery: GalleryGroup[];
 }
@@ -59,6 +61,7 @@ export function bakeAll(): Assets {
   const buildings = bakeBuildings();
   const animals = bakeAnimals();
   const npcs = NPC_SKINS.map((s) => bakeNpc(s));
+  const emotes = bakeEmotes();
 
   const charEntries: GalleryEntry[] = [];
   for (const s of hero.sheets) {
@@ -211,5 +214,5 @@ export function bakeAll(): Assets {
     },
   ];
 
-  return { hero, rogue, gun, muzzle, slime, nature, props, buildings, animals, npcs, gallery };
+  return { hero, rogue, gun, muzzle, slime, nature, props, buildings, animals, npcs, emotes, gallery };
 }

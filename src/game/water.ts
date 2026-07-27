@@ -1,21 +1,30 @@
 /**
  * Animated river surface.
  *
- * The river is rendered per-pixel every frame (the visible window only, at the
- * game's internal 448x252 resolution) rather than as a tiled sprite, which is
- * what lets the flow bend with the riverbank, foam against the shoreline and
- * break around rocks.
+ * The first version drove the whole surface from one global sine field, which
+ * produced smooth concentric contour lines — it read as a topographic map, not
+ * as water. Hand-drawn pixel water is not a gradient at all: it is a few flat
+ * depth bands with **discrete wave strokes** scattered over them, and the
+ * strokes scroll downstream. So that is how this is built now:
+ *
+ *   1. flat depth bands (3 values, dithered only at their boundaries)
+ *   2. two layers of dashed wave strokes on scrolling jittered lattices,
+ *      moving at different speeds so the surface has parallax
+ *   3. sparkle clusters on the fastest water
+ *   4. a lacy shoreline built from the same lattice trick, plus a hard
+ *      waterline pixel and a dark band where the bank shades the water
+ *   5. foam rings and V-wakes around obstacles
+ *
+ * Everything is a lattice/hash lookup rather than a continuous function, which
+ * is what keeps the marks discrete instead of smearing into contours.
  */
 import { R } from '../art/palette';
-import { fbm } from '../engine/rng';
+import { hash2 } from '../engine/rng';
 import { riverCenter, riverHalf } from './terrain';
 
-const NOISE = 128;
-
 /**
- * The surface is quantised to a 6-step ramp taken straight from the shared
- * palette and dithered between steps with a Bayer matrix, so it bands like
- * hand-drawn water and stays in the same colour world as every sprite.
+ * Six steps: the darkest three are the water body, 4 is a bright crest and 5
+ * is foam. Taken straight from the shared palette.
  */
 const RAMP: [number, number, number][] = [
   [R.water[0][0], R.water[0][1], R.water[0][2]],
@@ -39,25 +48,41 @@ export interface WaterObstacle {
   r: number;
 }
 
+/** One layer of scrolling dashes. */
+interface StrokeLayer {
+  /** Vertical spacing between rows of dashes. */
+  rowH: number;
+  /** Horizontal spacing between dash slots. */
+  cellW: number;
+  /** Rows scroll downstream this many px per second. */
+  speed: number;
+  /** Fraction of slots that actually carry a dash. */
+  density: number;
+  /** Dash length range. */
+  minLen: number;
+  maxLen: number;
+  /** Ramp step written by this layer. */
+  step: number;
+  seed: number;
+}
+
+const LAYERS: StrokeLayer[] = [
+  // Long slow troughs: the large-scale structure of the surface.
+  { rowH: 6, cellW: 22, speed: 11, density: 0.62, minLen: 8, maxLen: 18, step: 1, seed: 11 },
+  // Crests riding on top, faster. One ramp step up from the body colour — a
+  // white dash here reads as a scratch, not as water.
+  { rowH: 5, cellW: 16, speed: 21, density: 0.6, minLen: 5, maxLen: 13, step: 3, seed: 29 },
+  // Rare bright flecks, fastest. These are the only near-white marks on the
+  // open water, and they are two or three pixels long at most.
+  { rowH: 9, cellW: 34, speed: 38, density: 0.16, minLen: 2, maxLen: 3, step: 4, seed: 47 },
+];
+
 export class River {
-  private noise: Float32Array;
   private img: ImageData | null = null;
   private buf32: Uint32Array | null = null;
   private surface: HTMLCanvasElement | null = null;
   private sctx: CanvasRenderingContext2D | null = null;
   readonly obstacles: WaterObstacle[] = [];
-
-  constructor() {
-    this.noise = new Float32Array(NOISE * NOISE);
-    for (let y = 0; y < NOISE; y++)
-      for (let x = 0; x < NOISE; x++) this.noise[y * NOISE + x] = fbm(x * 0.09, y * 0.09, 3);
-  }
-
-  private n(x: number, y: number): number {
-    const xi = ((x | 0) % NOISE + NOISE) % NOISE;
-    const yi = ((y | 0) % NOISE + NOISE) % NOISE;
-    return this.noise[yi * NOISE + xi];
-  }
 
   private ensure(w: number, h: number): void {
     if (this.img && this.img.width === w && this.img.height === h) return;
@@ -69,21 +94,43 @@ export class River {
     this.buf32 = new Uint32Array(this.img.data.buffer);
   }
 
+  /**
+   * Is (wx, wy) inside a dash of this layer?
+   *
+   * The lattice scrolls downstream and each row is offset by a per-row hash, so
+   * dashes never line up into columns. `lateral` (0 at the bank, 1 mid-stream)
+   * speeds up the middle of the channel — a river does not move as one sheet.
+   */
+  private inStroke(L: StrokeLayer, wx: number, wy: number, t: number): boolean {
+    // The scroll must depend on time alone. Making it a function of x (to fake
+    // a faster mid-channel) shears the horizontal rows into diagonals, and the
+    // surface ends up looking like it has been scratched with a fork.
+    const scroll = t * L.speed;
+    const fy = wy + scroll;
+    const row = Math.floor(fy / L.rowH);
+    // Only the top pixel row of each band carries the dash: a 1px mark reads as
+    // a wave line, a 2px one reads as a stripe.
+    if (Math.floor(fy) - row * L.rowH !== 0) return false;
+    const rowShift = hash2(row, L.seed) * L.cellW;
+    const cx = Math.floor((wx + rowShift) / L.cellW);
+    const h = hash2(cx, row * 3 + L.seed);
+    if (h > L.density) return false;
+    const len = L.minLen + Math.floor(hash2(cx + 7, row + L.seed) * (L.maxLen - L.minLen + 1));
+    const start = cx * L.cellW - rowShift + Math.floor(hash2(cx + 31, row) * (L.cellW - len));
+    return wx >= start && wx < start + len;
+  }
+
   /** Draw the water covering the camera window. Coordinates are integers. */
   render(ctx: CanvasRenderingContext2D, camX: number, camY: number, w: number, h: number, time: number): void {
     this.ensure(w, h);
     const px = this.buf32!;
     px.fill(0);
 
-    const flow = time * 26; // downstream scroll in px
-    const t = time;
-
     for (let sy = 0; sy < h; sy++) {
       const wy = sy + camY;
       const cx = riverCenter(wy);
       const half = riverHalf(wy);
       const rowBase = sy * w;
-      // Only iterate the span that can possibly be water.
       const x0 = Math.max(0, Math.floor(cx - half - 2 - camX));
       const x1 = Math.min(w - 1, Math.ceil(cx + half + 2 - camX));
       for (let sx = x0; sx <= x1; sx++) {
@@ -92,71 +139,59 @@ export class River {
         if (d >= 0) continue;
         const depth = -d;
 
-        // Distance to the nearest in-river obstacle, for foam + wake.
-        let obsD = 999;
-        let wake = 0;
+        // --- 1. flat depth bands ------------------------------------------
+        // Two values over most of the channel, with the boundary dithered so
+        // it doesn't read as a contour line but the interiors stay flat.
+        let step = depth > 26 || (depth > 16 && BAYER[wy & 3][wx & 3] < (depth - 16) / 10) ? 1 : 2;
+
+        // --- 2. scrolling wave strokes ------------------------------------
+        for (const L of LAYERS) {
+          // Keep the bright flecks off the margins, where they fight the foam.
+          if (L.step === 4 && depth < 10) continue;
+          if (this.inStroke(L, wx, wy, time)) step = L.step;
+        }
+
+        // --- 3. bank shadow -----------------------------------------------
+        // Water against a bank reflects the bank rather than the sky, so it
+        // sits one step darker. This is what stops the river reading as a flat
+        // ribbon laid on the grass.
+        if (depth < 8) step = Math.max(0, step - 1);
+
+        // --- 4. shoreline foam --------------------------------------------
+        // A lacy, irregular line rather than a uniform band: same lattice
+        // trick, keyed on the distance to the bank.
+        if (depth < 6) {
+          const cell = Math.floor((wy + time * 7) / 4);
+          const bite = hash2(cell, Math.floor(wx / 6) + 3);
+          const reach = 1.4 + bite * 2.6;
+          if (depth < reach) step = 5;
+          else if (depth < reach + 1.4 && bite > 0.6) step = 4;
+        }
+
+        // --- 5. obstacles: foam ring + downstream V-wake -------------------
         for (const o of this.obstacles) {
           const dx = wx - o.x;
           const dy = wy - o.y;
           const dd = Math.hypot(dx, dy) - o.r;
-          if (dd < obsD) obsD = dd;
-          // A narrow V opening downstream of the rock.
-          if (dy > 0 && dy < 30) {
-            const spread = o.r * 0.35 + dy * 0.42;
+          if (dd < 2.6 && dd > -1) {
+            step = 5;
+          } else if (dy > 0 && dy < 34) {
+            const spread = o.r * 0.4 + dy * 0.45;
             const edge = Math.abs(Math.abs(dx) - spread);
-            if (edge < 2.5) wake = Math.max(wake, (1 - edge / 2.5) * (1 - dy / 30));
+            if (edge < 1.6 && hash2(Math.floor(wx / 3), Math.floor((wy + time * 30) / 3)) > 0.35) {
+              step = dy < 16 ? 5 : 4;
+            }
           }
         }
 
-        // Surface waves: scrolling downstream, sheared by the bank curvature.
-        const lateral = (wx - cx) / half;
-        const phase = wy * 0.26 - flow * 0.6 + Math.sin(wx * 0.05 + t * 0.9) * 2.4 + lateral * 2.2;
-        const band = Math.sin(phase) * 0.62 + Math.sin(phase * 0.41 + 1.7) * 0.38;
-        const swirl = this.n(wx * 0.22 - t * 1.6, wy * 0.22 - flow * 0.3);
-        const ripple = this.n(wx * 0.55 + t * 5, wy * 0.55 - flow * 0.9);
-
-        // `v` is a single brightness scalar; the ramp turns it into a colour.
-        const depthT = Math.min(1, depth / 26);
-        let v = 0.72 - depthT * 0.42;
-        v += band * 0.2;
-        v += (swirl - 0.5) * 0.34;
-
-        // Thin, fast highlight streaks running with the current.
-        const streak = Math.sin(phase * 2.6 + swirl * 5);
-        if (streak > 0.86 && depth > 4) v += 0.3;
-
-        let foam = 0;
-        // Specular glints riding the crests.
-        if (ripple > 0.78 && band > 0.15) foam = (ripple - 0.78) * 3.6;
-        // Shore foam: a lacy line hugging the bank.
-        const shore = 1 - Math.min(1, depth / 4);
-        if (shore > 0) {
-          const lace = this.n(wx * 0.65, wy * 0.65 - flow * 0.55);
-          foam = Math.max(foam, (shore * shore) * (0.5 + lace * 1.15));
-          if (depth < 1.4) foam = 1.2;
-        }
-        // Obstacle foam ring + the two wake lines trailing downstream.
-        if (obsD < 2.4) foam = Math.max(foam, (1 - obsD / 2.4) * 1.2);
-        if (wake > 0) {
-          const churn = this.n(wx * 0.8, wy * 0.8 - flow * 1.8);
-          foam = Math.max(foam, wake * (churn > 0.42 ? 0.9 : 0.25));
-        }
-
-        if (foam > 0) v = Math.max(v, 0.82 + Math.min(0.4, foam) * 0.45);
-
-        // Quantise to the ramp, dithering across the two nearest steps.
-        const f = Math.max(0, Math.min(1, v)) * (RAMP.length - 1);
-        let lvl = Math.floor(f);
-        if (f - lvl > BAYER[wy & 3][wx & 3]) lvl++;
-        if (lvl > RAMP.length - 1) lvl = RAMP.length - 1;
-        const c = RAMP[lvl];
-
-        // Shallow edges stay translucent so the baked riverbed shows through.
-        const alpha = Math.min(255, 138 + depth * 26);
+        const c = RAMP[Math.max(0, Math.min(RAMP.length - 1, step))];
+        // Shallow margins stay translucent so the baked riverbed shows through.
+        const alpha = Math.min(255, 150 + depth * 26);
         px[rowBase + sx] =
           ((alpha & 255) << 24) | ((c[2] & 255) << 16) | ((c[1] & 255) << 8) | (c[0] & 255);
       }
     }
+
     // putImageData would overwrite the ground instead of blending with it, so
     // the surface goes through an offscreen canvas and is composited normally.
     this.sctx!.putImageData(this.img!, 0, 0);

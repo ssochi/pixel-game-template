@@ -11,7 +11,7 @@ import { drawClip } from './art/sheet';
 import { Input } from './engine/input';
 import { Camera, GAME_H, GAME_W, Screen } from './engine/screen';
 import { Slime } from './game/agents';
-import { Critter, Duck, Villager } from './game/npc';
+import { Critter, Duck, Villager, gossip } from './game/npc';
 import { Lighting, type Light } from './game/lighting';
 import { Particles } from './game/particles';
 import { Player, type PlayerState } from './game/player';
@@ -53,7 +53,7 @@ function start(): void {
   // Townsfolk: each spawn gets a skin, cycled so neighbours don't match.
   const villagers = scene.villagerSpawns.map((sp, i) => {
     const anims = assets.npcs[i % assets.npcs.length];
-    return new Villager(anims, sp.x, sp.y, sp.home, 1000 + i * 37, sp.kind, sp.stationary);
+    return new Villager(anims, sp.x, sp.y, sp.home, 1000 + i * 37, sp.kind, sp.stationary, sp.schedule);
   });
 
   const animalOf = (kind: string) =>
@@ -97,6 +97,26 @@ function start(): void {
   const lights: Light[] = [];
   let time = 0;
   let last = performance.now();
+
+  // Dev hook: lets a script (or the console) drop the player anywhere in the
+  // world to look at a specific corner of it. Stripped from production builds.
+  if (import.meta.env.DEV) {
+    (window as unknown as { game: unknown }).game = {
+      player,
+      camera,
+      scene,
+      villagers,
+      warp(x: number, y: number) {
+        player.x = x;
+        player.y = y;
+        camera.follow(x, y, WORLD_W, WORLD_H, 1, true);
+      },
+      setTime(t: number) {
+        dayT = t;
+        dayPaused = true;
+      },
+    };
+  }
 
   function update(dt: number): void {
     if (input.pressed('tab')) gallery.open = !gallery.open;
@@ -142,7 +162,8 @@ function start(): void {
       }
     }
 
-    for (const v of villagers) v.update(dt, scene.solids);
+    for (const v of villagers) v.update(dt, scene.solids, dayT);
+    gossip(villagers, dt);
     for (const a of animals) a.update(dt, scene.solids);
     for (const d of ducks) d.update(dt, scene.solids);
 
@@ -211,7 +232,7 @@ function start(): void {
       });
     }
     for (const s of slimes) items.push({ y: s.sortY, draw: () => s.draw(ctx, camX, camY) });
-    for (const v of villagers) items.push({ y: v.sortY, draw: () => v.draw(ctx, camX, camY) });
+    for (const v of villagers) items.push({ y: v.sortY, draw: () => v.draw(ctx, camX, camY, assets.emotes) });
     for (const a of animals) items.push({ y: a.sortY, draw: () => a.draw(ctx, camX, camY) });
     for (const d of ducks) items.push({ y: d.sortY, draw: () => d.draw(ctx, camX, camY) });
     items.push({ y: player.y, draw: () => player.draw(ctx, camX, camY) });

@@ -39,6 +39,8 @@ export interface Skin {
   hooded?: boolean;
   scarf?: boolean;
   cape?: boolean;
+  /** A flared coat below the belt that swings with the stride. */
+  coatTail?: boolean;
 }
 
 export const HERO_SKIN: Skin = {
@@ -57,6 +59,7 @@ export const HERO_SKIN: Skin = {
   bootDark: P.bootDark,
   ink: P.ink,
   scarf: true,
+  coatTail: true,
 };
 
 export const ROGUE_SKIN: Skin = {
@@ -76,6 +79,7 @@ export const ROGUE_SKIN: Skin = {
   ink: P.ink,
   hooded: true,
   cape: true,
+  coatTail: true,
 };
 
 /**
@@ -139,6 +143,8 @@ export interface Pose {
   armBY: number;
   /** Shoulder twist, in px — pushes the far shoulder in. */
   twist: number;
+  /** Coat-tail swing, in px. Trails the hips so the cloth follows through. */
+  tail: number;
 }
 
 const REST: Pose = {
@@ -156,6 +162,7 @@ const REST: Pose = {
   armBX: 0,
   armBY: 0,
   twist: 0,
+  tail: 0,
 };
 
 function pose(p: Partial<Pose>): Pose {
@@ -186,10 +193,15 @@ function drawLeg(
   const kneeY = (hy + fy) / 2;
   buf.capsule(hx, hy, kneeX, kneeY, 1.6, pants);
   buf.capsule(kneeX, kneeY, fx, fy - 1, 1.4, pants);
-  // Boot: a stubby foot pointing "down-screen".
-  buf.fillRect(Math.round(fx) - 2, Math.round(fy) - 2, 4, 2, boot);
-  buf.blend(Math.round(fx) - 2, Math.round(fy) - 1, isBack ? back(s.bootDark) : s.bootDark);
-  buf.blend(Math.round(fx) + 1, Math.round(fy) - 1, isBack ? back(s.bootDark) : s.bootDark);
+  // Boot: a cuffed top, a body and a heel. Three bands in five pixels is
+  // enough to read as footwear rather than as the end of the trouser.
+  const bx = Math.round(fx);
+  const by = Math.round(fy);
+  const bootDark = isBack ? back(s.bootDark) : s.bootDark;
+  buf.fillRect(bx - 2, by - 3, 4, 1, isBack ? back(s.boot) : s.boot); // cuff
+  buf.fillRect(bx - 2, by - 2, 5, 2, boot);
+  buf.hline(bx - 2, bx + 2, by - 1, bootDark);
+  buf.set(bx - 2, by - 2, bootDark);
 }
 
 function drawArm(
@@ -216,7 +228,16 @@ function drawArm(
   buf.set(hxi, hyi + 2, isBack ? back(s.skinDark) : s.skinDark);
 }
 
-function drawTorso(buf: PixelBuffer, cx: number, shY: number, hipY: number, s: Skin, dir: Dir, twist: number): void {
+function drawTorso(
+  buf: PixelBuffer,
+  cx: number,
+  shY: number,
+  hipY: number,
+  s: Skin,
+  dir: Dir,
+  twist: number,
+  tailSwing: number,
+): void {
   const shHalf = dir === 1 ? 3.2 : 4.6;
   const hipHalf = dir === 1 ? 2.6 : 3.2;
   const rows = Math.max(1, Math.round(hipY - shY));
@@ -243,6 +264,26 @@ function drawTorso(buf: PixelBuffer, cx: number, shY: number, hipY: number, s: S
   if (dir !== 2) {
     // Chest strap running shoulder -> opposite hip.
     buf.line(Math.round(cx - shHalf + 1), Math.round(shY + 1), Math.round(cx + 1), beltY - 2, s.accentDark);
+  }
+  if (s.coatTail) {
+    // A short flared coat below the belt. It swings opposite to the stride,
+    // which is most of what makes the walk feel like it has weight.
+    // Three rows only. Six turned the coat into a full-length skirt and buried
+    // the legs — the walk cycle stopped reading entirely.
+    const sw = Math.round(tailSwing * 0.5);
+    for (let i = 0; i < 3; i++) {
+      const y = beltY + 1 + i;
+      const half = hipHalf - 0.2 + i * 0.5;
+      const off = Math.round((sw * i) / 2);
+      const x0 = Math.round(cx - half) + off;
+      const x1 = Math.round(cx + half) + off;
+      for (let x = x0; x <= x1; x++) {
+        let c = s.coatDark;
+        if (x <= x0) c = s.coat;
+        else if (x >= x1 - 1) c = shade(s.coatDark, -0.3);
+        buf.set(x, y, c);
+      }
+    }
   }
   if (s.cape) {
     // A short cape peeking out behind the shoulders.
@@ -409,7 +450,7 @@ export function drawHumanoid(s: Skin, dir: Dir, p: Pose, flap = 0): PixelBuffer 
       if (buf.alphaAt(cx, y) > 200) buf.set(cx, y, s.pantsDark);
     }
   }
-  drawTorso(buf, cx + p.lean, shY, hipY, s, dir, p.twist);
+  drawTorso(buf, cx + p.lean, shY, hipY, s, dir, p.twist, p.tail);
   drawScarf(buf, cx + p.lean, shY, s, dir, flap);
   drawArm(
     buf,
@@ -453,30 +494,70 @@ function idlePoses(): Pose[] {
   return out;
 }
 
+/**
+ * Walk cycle.
+ *
+ * The timing is the whole animation. A walk has two *contacts* (legs at full
+ * stride, body at its lowest) and two *passing* poses (legs together, body at
+ * its highest) per cycle — so the vertical bob runs at **twice** the frequency
+ * of the leg swing and is in antiphase with the stride. The first version used
+ * `bob = -|sin|` against `legX = sin`, which lifted the body exactly when the
+ * legs were furthest apart: the character appeared to bounce upward as it
+ * lunged, which is why it read as floaty.
+ *
+ * The head and the coat tail also lag the body by a fraction of a cycle, so
+ * they follow through instead of moving as one rigid piece.
+ */
 function walkPoses(frames = 8, amp = 1): Pose[] {
   const out: Pose[] = [];
+  const lag = 0.12; // fraction of a cycle the head/tail trail the hips by
   for (let i = 0; i < frames; i++) {
     const ph = (i / frames) * Math.PI * 2;
     const s = Math.sin(ph);
     const c = Math.cos(ph);
+    const sLag = Math.sin(ph - lag * Math.PI * 2);
+    // +1 at contact (legs apart), -1 at passing (legs together).
+    const stride = Math.abs(s);
+    const run = amp > 1;
     out.push(
       pose({
-        bob: -Math.abs(s) * (amp > 1 ? 1.6 : 1),
-        crouch: amp > 1 ? 1 : 0,
-        lean: amp > 1 ? 1.2 : 0,
-        legAX: s * 2.6 * amp,
-        legAY: -Math.max(0, s) * 2 * amp,
-        legBX: -s * 2.6 * amp,
-        legBY: -Math.max(0, -s) * 2 * amp,
-        armAX: -s * 1.8 * amp,
-        armAY: -Math.abs(s) * 0.8,
-        armBX: s * 1.8 * amp,
-        armBY: -Math.abs(s) * 0.8,
-        twist: c * 0.8 * amp,
+        // Down on contact, up on the pass.
+        bob: (stride - 0.5) * (run ? 2.4 : 1.5),
+        crouch: run ? 1 : 0,
+        lean: run ? 1.6 : 0.4,
+        legAX: s * 2.8 * amp,
+        // The trailing leg lifts its heel just after it leaves the ground.
+        legAY: -Math.max(0, Math.sin(ph - 0.6)) * 2.1 * amp,
+        legBX: -s * 2.8 * amp,
+        legBY: -Math.max(0, Math.sin(ph + Math.PI - 0.6)) * 2.1 * amp,
+        armAX: -s * 2 * amp,
+        armAY: -stride * 0.9,
+        armBX: s * 2 * amp,
+        armBY: -stride * 0.9,
+        // Head lags the hips and dips slightly on each contact.
+        headX: sLag * 0.5 * amp,
+        headY: (Math.abs(sLag) - 0.5) * (run ? 1.2 : 0.7),
+        twist: c * 0.9 * amp,
+        tail: -sLag * 2.2 * amp,
       }),
     );
   }
   return out;
+}
+
+/**
+ * A generic work loop: raise, swing down, follow through, reset. Used by NPCs
+ * at a forge, a field or a market stall — from a distance the same motion
+ * reads as hammering, hoeing or kneading depending on what they stand next to.
+ */
+function workPoses(): Pose[] {
+  return [
+    pose({ armAX: 1, armAY: -4, lean: -0.6, twist: -0.6, headY: -0.4 }),
+    pose({ armAX: 2, armAY: -5.5, lean: -1, twist: -1 }),
+    pose({ armAX: 3.5, armAY: 1, lean: 1.4, twist: 1.2, bob: 1, crouch: 1 }),
+    pose({ armAX: 2.5, armAY: 0.5, lean: 1, twist: 0.8, bob: 0.5 }),
+    pose({ armAX: 1, armAY: -1.5, lean: 0, twist: 0 }),
+  ];
 }
 
 function attackPoses(): Pose[] {
@@ -555,6 +636,8 @@ export interface CharacterAnims {
   run: Clip[];
   attack: Clip[];
   death: Clip[];
+  /** Present on NPCs: a looping work motion. */
+  work?: Clip[];
   /** Every baked sheet, for the asset gallery. */
   sheets: { name: string; dir: Dir; sheet: Sheet }[];
 }
@@ -568,17 +651,21 @@ export function bakeNpc(s: Skin): CharacterAnims {
   const dirs: Dir[] = [0, 1, 2];
   const idleP = idlePoses();
   const walkP = walkPoses(8, 1);
+  const workP = workPoses();
   const idle: Clip[] = [];
   const walk: Clip[] = [];
+  const work: Clip[] = [];
   const sheets: { name: string; dir: Dir; sheet: Sheet }[] = [];
   for (const d of dirs) {
     const si = bake(s, d, idleP, 0.6);
     const sw = bake(s, d, walkP, 1.4);
+    const sk = bake(s, d, workP, 0.8);
     idle[d] = clip(si, range(si.count), 6);
     walk[d] = clip(sw, range(sw.count), 12);
+    work[d] = clip(sk, range(sk.count), 9);
     sheets.push({ name: 'idle', dir: d, sheet: si }, { name: 'walk', dir: d, sheet: sw });
   }
-  return { idle, walk, run: walk, attack: idle, death: idle, sheets };
+  return { idle, walk, run: walk, attack: idle, death: idle, work, sheets };
 }
 
 export function bakeCharacter(s: Skin): CharacterAnims {

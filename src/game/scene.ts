@@ -15,7 +15,7 @@ import { P, R } from '../art/palette';
 import { bakeSheet } from '../art/sheet';
 import { RNG } from '../engine/rng';
 import type { Light } from './lighting';
-import type { Area } from './npc';
+import type { Area, ScheduleSlot } from './npc';
 import {
   BRIDGE,
   FIELDS,
@@ -64,6 +64,7 @@ export interface Spawn {
   y: number;
   home: Area;
   stationary?: boolean;
+  schedule?: ScheduleSlot[];
 }
 
 export class Scene {
@@ -76,6 +77,8 @@ export class Scene {
   readonly animalSpawns: Spawn[] = [];
   readonly duckSpawns: Spawn[] = [];
   chest!: Deco;
+  /** Doorsteps of the houses, used as villagers' homes. */
+  readonly homes: Area[] = [];
   private lightSeed = 0;
   private rng = new RNG(20260727);
 
@@ -147,6 +150,27 @@ export class Scene {
     }
     if (bld.chimney) this.smoke.push({ x: x + bld.chimney.x, y: y + bld.chimney.y, rate: 5 });
     if (sign) this.add(sign, x + bld.solidW - 4, y - 20, { sortY: y + 1, label: `${label} sign` });
+    // The patch of street just outside the door: where residents go to sleep.
+    this.homes.push({ x0: x - 12, y0: y + 6, x1: x + 12, y1: y + 16 });
+  }
+
+  /**
+   * A day: out to work at dawn, into the square and the tavern in the evening,
+   * home at night. Keyed to the same day fraction the lighting uses, so the
+   * town empties as it gets dark.
+   */
+  private dayFor(work: Area, activity: 'work' | 'wander'): ScheduleSlot[] {
+    const home = this.homes.length
+      ? this.homes[this.rng.int(0, this.homes.length - 1)]
+      : { x0: 540, y0: 500, x1: 590, y1: 520 };
+    const square: Area = { x0: PLAZA.x0 + 20, y0: PLAZA.y0 + 20, x1: PLAZA.x1 - 20, y1: PLAZA.y1 - 20 };
+    return [
+      { from: 0, area: home, activity: 'sleep' },
+      { from: 0.26 + this.rng.range(0, 0.04), area: work, activity },
+      { from: 0.72 + this.rng.range(0, 0.05), area: square, activity: 'socialise' },
+      // Staggered, so the whole town doesn't turn in on the same tick.
+      { from: 0.84 + this.rng.range(0, 0.06), area: home, activity: 'sleep' },
+    ];
   }
 
   private build(): void {
@@ -259,29 +283,35 @@ export class Scene {
     }
 
     // Townsfolk milling about the square.
-    for (let i = 0; i < 6; i++) {
+    const square: Area = { x0: PLAZA.x0 + 20, y0: PLAZA.y0 + 20, x1: PLAZA.x1 - 20, y1: PLAZA.y1 - 20 };
+    for (let i = 0; i < 7; i++) {
       this.villagerSpawns.push({
         kind: 'townsfolk',
         x: this.rng.range(PLAZA.x0 + 30, PLAZA.x1 - 30),
         y: this.rng.range(PLAZA.y0 + 30, PLAZA.y1 - 30),
-        home: { x0: PLAZA.x0 + 20, y0: PLAZA.y0 + 20, x1: PLAZA.x1 - 20, y1: PLAZA.y1 - 20 },
+        home: square,
+        schedule: this.dayFor(square, 'wander'),
       });
     }
     // …and a few walking the streets.
+    const street: Area = { x0: 545, y0: 180, x1: 590, y1: 880 };
     for (let i = 0; i < 5; i++) {
       this.villagerSpawns.push({
         kind: 'walker',
         x: 565 + this.rng.range(-12, 12),
         y: this.rng.range(200, 860),
-        home: { x0: 545, y0: 180, x1: 590, y1: 880 },
+        home: street,
+        schedule: this.dayFor(street, 'wander'),
       });
     }
+    const high: Area = { x0: 330, y0: 492, x1: 980, y1: 518 };
     for (let i = 0; i < 3; i++) {
       this.villagerSpawns.push({
         kind: 'walker',
         x: this.rng.range(340, 960),
         y: 504 + this.rng.range(-10, 10),
-        home: { x0: 330, y0: 492, x1: 980, y1: 518 },
+        home: high,
+        schedule: this.dayFor(high, 'wander'),
       });
     }
   }
@@ -303,11 +333,13 @@ export class Scene {
     this.add(this.a.props.crates[0], mx - 34, my + 12, { solid: 8, label: 'grain sack' });
     this.add(this.a.props.crates[1], mx - 22, my + 18, { solid: 8, label: 'grain sack' });
     this.add(b.cart, mx - 56, my - 6, { solid: 12, label: 'cart' });
+    const millYard: Area = { x0: mx - 60, y0: my + 10, x1: mx + 20, y1: my + 40 };
     this.villagerSpawns.push({
       kind: 'miller',
       x: mx - 20,
       y: my + 24,
-      home: { x0: mx - 60, y0: my + 10, x1: mx + 20, y1: my + 40 },
+      home: millYard,
+      schedule: this.dayFor(millYard, 'work'),
     });
   }
 
@@ -370,13 +402,24 @@ export class Scene {
 
     // Farmers working the fields.
     for (const f of FIELDS.slice(0, 3)) {
+      const plot: Area = { x0: f.x0 + 12, y0: f.y0 + 12, x1: f.x1 - 12, y1: f.y1 - 12 };
       this.villagerSpawns.push({
         kind: 'farmer',
         x: (f.x0 + f.x1) / 2,
         y: (f.y0 + f.y1) / 2,
-        home: { x0: f.x0 + 12, y0: f.y0 + 12, x1: f.x1 - 12, y1: f.y1 - 12 },
+        home: plot,
+        schedule: this.dayFor(plot, 'work'),
       });
     }
+    // A herder living with the animals.
+    const padArea: Area = { x0: PADDOCK.x0 + 24, y0: PADDOCK.y0 + 24, x1: PADDOCK.x1 - 24, y1: PADDOCK.y1 - 24 };
+    this.villagerSpawns.push({
+      kind: 'herder',
+      x: (PADDOCK.x0 + PADDOCK.x1) / 2,
+      y: PADDOCK.y0 + 40,
+      home: padArea,
+      schedule: this.dayFor(padArea, 'work'),
+    });
   }
 
   private buildRiver(): void {
@@ -444,11 +487,18 @@ export class Scene {
     }
 
     // A fisherman on the east bank.
+    const bank: Area = {
+      x0: riverCenter(600) + riverHalf(600) + 10,
+      y0: 580,
+      x1: riverCenter(600) + riverHalf(600) + 30,
+      y1: 640,
+    };
     this.villagerSpawns.push({
       kind: 'fisher',
-      x: riverCenter(600) + riverHalf(600) + 16,
+      x: bank.x0 + 6,
       y: 600,
-      home: { x0: riverCenter(600) + riverHalf(600) + 10, y0: 580, x1: riverCenter(600) + riverHalf(600) + 30, y1: 640 },
+      home: bank,
+      schedule: this.dayFor(bank, 'work'),
     });
   }
 

@@ -11,7 +11,7 @@
 import { PixelBuffer, rgba, shade, type RGBA } from './pixel';
 import { P, R, type Ramp } from './palette';
 import { bakeSheet, clip, type Clip, type Sheet } from './sheet';
-import { RNG } from '../engine/rng';
+import { RNG, hash2 } from '../engine/rng';
 
 export type RoofStyle = 'shingle' | 'thatch' | 'tile';
 
@@ -32,6 +32,13 @@ export interface BuildingOpts {
   seed?: number;
   /** Extra height for a second storey of windows. */
   storeys?: 1 | 2;
+  /** Overhang the upper storey past the lower one (timber-frame jetty). */
+  jetty?: boolean;
+  /** A single-pitch outbuilding stuck on one side. */
+  lean?: 'none' | 'left' | 'right';
+  /** Windows poking out of the roof plane. */
+  dormers?: number;
+  ivy?: boolean;
 }
 
 export interface Building {
@@ -48,113 +55,138 @@ export interface Building {
   solidH: number;
 }
 
-const EAVE = 3;
-
-/** Offset courses of shingles, dark at the eave, light along the ridge. */
-function shingles(b: PixelBuffer, x0: number, y0: number, w: number, h: number, ramp: Ramp, seed: number): void {
-  const rng = new RNG(seed);
-  const course = 4;
-  for (let j = 0; j < h; j++) {
-    const row = Math.floor(j / course);
-    const off = (row % 2) * 3;
-    // The roof is brightest at the ridge and falls away towards the eave.
-    const t = 1 - j / h;
-    for (let i = 0; i < w; i++) {
-      const lx = (i + off) % 6;
-      let step = t > 0.72 ? 3 : t > 0.34 ? 2 : 1;
-      if (j % course === 0) step -= 1; // shadow line under each course
-      if (lx === 0) step -= 1; // gap between shingles
-      if (rng.chance(0.06)) step -= 1;
-      b.set(x0 + i, y0 + j, ramp[Math.max(0, Math.min(4, step))]);
-    }
-  }
-}
-
 /**
- * Thatch: horizontal *courses* of combed straw, not vertical stripes.
+ * A gable roof, drawn as a roof and not as a rectangle.
  *
- * The first version ran one continuous stroke down each column, which read as
- * planking. Real thatch is laid in overlapping horizontal bundles, so the
- * texture needs a strong course line every few rows with short straw ticks
- * inside each course, jittered per course so the ticks never line up
- * vertically into a stripe.
+ * Seen from the front-and-above you see one roof plane running up to the ridge.
+ * That plane is a **trapezoid** — wide at the eaves, narrower at the ridge —
+ * and its two sloping edges carry barge boards. Above the ridge a couple of
+ * pixels of the far plane show in a darker value. Drawing the roof as a plain
+ * rectangle is what made the first version of these buildings read as boxes.
  */
-function thatch(b: PixelBuffer, x0: number, y0: number, w: number, h: number, ramp: Ramp, seed: number): void {
-  const rng = new RNG(seed);
-  const course = 5;
+function gableRoof(
+  b: PixelBuffer,
+  cx: number,
+  top: number,
+  h: number,
+  eaveHalf: number,
+  ridgeHalf: number,
+  ramp: Ramp,
+  style: RoofStyle,
+  seed: number,
+): void {
+  // Far slope peeking over the ridge.
+  b.fillRect(cx - ridgeHalf, top - 2, ridgeHalf * 2, 3, ramp[1]);
+
   for (let j = 0; j < h; j++) {
-    const row = Math.floor(j / course);
-    const within = j % course;
-    const shift = Math.floor(hashJit(rng, row) * 4);
-    const t = 1 - j / h;
-    for (let i = 0; i < w; i++) {
-      let step = t > 0.72 ? 3 : t > 0.3 ? 2 : 1;
-      // Straw ticks: short marks, offset per course.
-      if ((i + shift + row * 2) % 3 === 0 && within > 0 && within < course - 1) step += 1;
-      // The bottom of each course is where the next bundle overlaps it.
-      if (within === course - 1) step -= 2;
-      if (j === h - 1) step = 0;
-      b.set(x0 + i, y0 + j, ramp[Math.max(0, Math.min(4, step))]);
+    const t = j / (h - 1);
+    const half = Math.round(ridgeHalf + (eaveHalf - ridgeHalf) * t);
+    const y = top + j;
+    for (let x = cx - half; x <= cx + half; x++) {
+      const i = x - (cx - half);
+      const w = half * 2 + 1;
+      let step: number;
+      if (style === 'thatch') {
+        const course = 5;
+        const within = j % course;
+        const shift = Math.floor(hash2(Math.floor(j / course), seed) * 4);
+        step = t < 0.28 ? 3 : t < 0.7 ? 2 : 1;
+        if ((i + shift) % 3 === 0 && within > 0 && within < course - 1) step += 1;
+        if (within === course - 1) step -= 2;
+      } else if (style === 'tile') {
+        const course = 5;
+        const row = Math.floor(j / course);
+        const within = j % course;
+        const lx = (i + (row % 2) * 2) % 4;
+        step = t < 0.3 ? 3 : 2;
+        if (lx === 0) step -= 1;
+        else if (lx === 1) step += 1;
+        if (within === 0) step -= 2;
+        else if (within === 1) step += 1;
+      } else {
+        const course = 4;
+        const row = Math.floor(j / course);
+        const lx = (i + (row % 2) * 3) % 6;
+        step = t < 0.28 ? 3 : t < 0.66 ? 2 : 1;
+        if (j % course === 0) step -= 1;
+        if (lx === 0) step -= 1;
+        if (hash2(i * 3 + j, seed) > 0.94) step -= 1;
+      }
+      // Barge boards: the sloping edges of the gable, in timber.
+      if (i < 2 || i > w - 3) step = -9;
+      b.set(x, y, step === -9 ? R.wood[1] : ramp[Math.max(0, Math.min(4, step))]);
     }
   }
-  // Fat ridge cap with a bound edge.
-  b.fillRect(x0, y0, w, 3, ramp[3]);
-  b.hline(x0, x0 + w - 1, y0, ramp[4]);
-  b.hline(x0, x0 + w - 1, y0 + 3, ramp[1]);
-  for (let i = 2; i < w; i += 7) b.vline(x0 + i, y0, y0 + 3, ramp[1]);
+  // Ridge cap, brightest line on the building.
+  b.fillRect(cx - ridgeHalf - 1, top, ridgeHalf * 2 + 3, 2, ramp[4]);
+  b.hline(cx - ridgeHalf - 1, cx + ridgeHalf + 1, top + 2, ramp[3]);
 }
 
-function hashJit(rng: RNG, n: number): number {
-  // Deterministic per-course jitter without consuming the shared stream.
-  return ((Math.sin(n * 12.9898 + rng.next() * 0) * 43758.5453) % 1 + 1) % 1;
+/** A single-pitch lean-to stuck on the side of a building. */
+function leanTo(b: PixelBuffer, x0: number, baseY: number, w: number, wallH: number, roofH: number, ramp: Ramp): void {
+  b.fillRect(x0, baseY - wallH, w, wallH, R.wood[2]);
+  for (let i = 0; i < w; i += 3) b.vline(x0 + i, baseY - wallH, baseY - 1, R.wood[1]);
+  b.fillRect(x0, baseY - wallH - roofH, w, roofH, ramp[2]);
+  b.hline(x0, x0 + w - 1, baseY - wallH - roofH, ramp[4]);
+  b.hline(x0, x0 + w - 1, baseY - wallH - 1, R.night[1]);
+  for (let j = 1; j < roofH; j += 3) b.hline(x0, x0 + w - 1, baseY - wallH - roofH + j, ramp[1]);
 }
 
-/**
- * Terracotta pantiles: vertical ribs *and* horizontal courses. Ribs alone give
- * a corrugated-iron look; the course lines are what make it read as tile.
- */
-function tiles(b: PixelBuffer, x0: number, y0: number, w: number, h: number, ramp: Ramp): void {
-  const course = 5;
-  for (let j = 0; j < h; j++) {
-    const t = 1 - j / h;
-    const row = Math.floor(j / course);
-    const within = j % course;
-    for (let i = 0; i < w; i++) {
-      const lx = (i + (row % 2) * 2) % 4;
-      let step = t > 0.7 ? 3 : 2;
-      if (lx === 0) step -= 1; // valley between ribs
-      else if (lx === 1) step += 1; // lit crown of the rib
-      if (within === 0) step -= 2; // shadow under the course above
-      if (within === 1) step += 1; // lit lip of the tile
-      b.set(x0 + i, y0 + j, ramp[Math.max(0, Math.min(4, step))]);
-    }
-  }
-}
-
-function drawWindow(b: PixelBuffer, x: number, y: number, lit = true): void {
-  // Frame, glass, mullions, sill. Seven pixels is enough for all four.
+function drawWindow(b: PixelBuffer, x: number, y: number, shutters: boolean, box: boolean): void {
   b.fillRect(x - 3, y - 3, 7, 7, R.wood[1]);
-  b.fillRect(x - 2, y - 2, 5, 5, lit ? R.gold[4] : R.night[2]);
-  if (lit) {
-    b.fillRect(x - 2, y - 2, 5, 2, R.gold[3]);
-    b.set(x - 2, y - 2, R.gold[2]);
-  }
+  b.fillRect(x - 2, y - 2, 5, 5, R.gold[4]);
+  b.fillRect(x - 2, y - 2, 5, 2, R.gold[3]);
+  b.set(x - 2, y - 2, R.gold[2]);
   b.vline(x, y - 2, y + 2, R.wood[1]);
   b.hline(x - 2, x + 2, y, R.wood[1]);
   b.fillRect(x - 4, y + 4, 9, 1, R.wood[3]);
+  if (shutters) {
+    for (const sx of [x - 5, x + 4]) {
+      b.fillRect(sx, y - 3, 2, 7, R.teal[1]);
+      b.vline(sx, y - 3, y + 3, R.teal[2]);
+    }
+  }
+  if (box) {
+    b.fillRect(x - 4, y + 5, 9, 3, R.wood[1]);
+    b.hline(x - 4, x + 4, y + 5, R.wood[2]);
+    for (let i = -3; i <= 3; i += 2) {
+      b.set(x + i, y + 4, R.leaf[2]);
+      b.set(x + i, y + 3, i % 4 === 1 ? R.red[3] : R.gold[4]);
+    }
+  }
 }
 
-function drawDoor(b: PixelBuffer, x: number, y: number, w: number, h: number): void {
+function drawDoor(b: PixelBuffer, x: number, y: number, w: number, h: number, canopy: boolean): void {
   b.fillRect(x - w / 2 - 1, y - h - 1, w + 2, h + 1, R.wood[1]);
   b.fillRect(x - w / 2, y - h, w, h, R.wood[2]);
   for (let i = 0; i < w; i += 3) b.vline(x - w / 2 + i, y - h, y - 1, R.wood[1]);
   b.hline(x - w / 2, x + w / 2 - 1, y - h, R.wood[3]);
-  // Iron bands and a handle.
   b.hline(x - w / 2, x + w / 2 - 1, y - h + 3, R.metal[1]);
   b.hline(x - w / 2, x + w / 2 - 1, y - 4, R.metal[1]);
   b.set(x + w / 2 - 2, y - Math.round(h / 2), R.gold[3]);
-  // Stone step.
-  b.fillRect(x - w / 2 - 1, y, w + 2, 1, R.stone[2]);
+  b.fillRect(x - w / 2 - 2, y, w + 4, 1, R.stone[2]);
+  b.fillRect(x - w / 2 - 1, y - 1, w + 2, 1, R.stone[3]);
+  if (canopy) {
+    // A little pitched hood over the doorway, on two brackets.
+    const cw = w + 8;
+    b.fillRect(x - cw / 2, y - h - 5, cw, 3, R.wood[1]);
+    b.hline(x - cw / 2, x + cw / 2 - 1, y - h - 5, R.wood[3]);
+    b.set(x - cw / 2 + 1, y - h - 2, R.wood[1]);
+    b.set(x + cw / 2 - 2, y - h - 2, R.wood[1]);
+  }
+}
+
+/** A dormer poking out of the roof plane. */
+function dormer(b: PixelBuffer, x: number, y: number, ramp: Ramp): void {
+  b.fillRect(x - 6, y, 13, 9, R.paper[3]);
+  b.fillRect(x - 6, y + 7, 13, 2, R.paper[2]);
+  for (let j = 0; j < 5; j++) {
+    const half = 7 - j;
+    b.fillRect(x - half, y - 5 + j, half * 2 + 1, 1, ramp[j < 2 ? 3 : 2]);
+  }
+  b.hline(x - 7, x + 7, y - 5, ramp[4]);
+  b.fillRect(x - 2, y + 2, 5, 5, R.wood[1]);
+  b.fillRect(x - 1, y + 3, 3, 3, R.gold[4]);
 }
 
 export function building(opts: BuildingOpts): Building {
@@ -172,81 +204,130 @@ export function building(opts: BuildingOpts): Building {
     stoneBase = false,
     seed = 1,
     storeys = 1,
+    jetty = storeys === 2,
+    lean = 'none',
+    dormers = 0,
+    ivy = false,
   } = opts;
 
-  const roofW = w + EAVE * 2;
-  const bw = roofW + 6;
-  const bh = roofH + wallH + 8;
+  const rng = new RNG(seed);
+  const eaveHalf = Math.round(w / 2) + 4;
+  const ridgeHalf = Math.max(4, Math.round(eaveHalf * 0.42));
+  const leanW = lean === 'none' ? 0 : Math.round(w * 0.34);
+  const bw = eaveHalf * 2 + 10 + leanW * 2;
+  const bh = roofH + wallH + 12;
   const b = new PixelBuffer(bw, bh);
   const cx = Math.round(bw / 2);
   const baseY = bh - 4;
   const wallTop = baseY - wallH;
   const roofTop = wallTop - roofH;
+  // The upper storey overhangs the lower one — a jetty. Very characteristic of
+  // timber-framed towns, and it breaks the flat slab of wall for three pixels
+  // of work.
+  const upperHalf = Math.round(w / 2);
+  const lowerHalf = jetty ? upperHalf - 3 : upperHalf;
+  const jettyY = jetty ? wallTop + Math.round(wallH * 0.46) : baseY;
 
-  b.groundShadow(cx, baseY + 1, w / 2 + 2, 3, 120);
+  b.groundShadow(cx, baseY + 1, lowerHalf + 3, 3, 120);
 
-  // --- wall ---------------------------------------------------------------
-  const wx0 = cx - Math.round(w / 2);
-  b.fillRect(wx0, wallTop, w, wallH, wall[3]);
-  // Plaster is lightest at the top where it catches the sky.
-  b.fillRect(wx0, wallTop, w, 2, wall[4]);
-  b.fillRect(wx0, baseY - 3, w, 3, wall[2]);
+  // --- lean-to behind the main block --------------------------------------
+  if (lean !== 'none') {
+    const lx = lean === 'left' ? cx - upperHalf - leanW : cx + upperHalf;
+    leanTo(b, lx, baseY, leanW, Math.round(wallH * 0.55), 8, roofRamp);
+  }
+
+  // --- walls ---------------------------------------------------------------
+  const paintWall = (x0: number, x1: number, y0: number, y1: number): void => {
+    b.fillRect(x0, y0, x1 - x0, y1 - y0, wall[3]);
+    b.fillRect(x0, y0, x1 - x0, 2, wall[4]);
+    b.fillRect(x0, y1 - 3, x1 - x0, 3, wall[2]);
+  };
+  paintWall(cx - upperHalf, cx + upperHalf, wallTop, jettyY);
+  paintWall(cx - lowerHalf, cx + lowerHalf, jettyY, baseY);
+  if (jetty) {
+    // Joist ends under the overhang, and the shadow it casts.
+    b.hline(cx - upperHalf, cx + upperHalf - 1, jettyY, R.wood[1]);
+    b.hline(cx - lowerHalf, cx + lowerHalf - 1, jettyY + 1, R.night[1]);
+    for (let x = cx - upperHalf + 2; x < cx + upperHalf; x += 6) b.fillRect(x, jettyY - 1, 2, 2, R.wood[2]);
+  }
   if (stoneBase) {
-    for (let y = baseY - 6; y < baseY; y++)
-      for (let x = wx0; x < wx0 + w; x++) {
+    for (let y = baseY - 7; y < baseY; y++)
+      for (let x = cx - lowerHalf; x < cx + lowerHalf; x++) {
         const n = ((x * 7 + y * 13) % 11) / 11;
         b.set(x, y, n > 0.7 ? R.stone[3] : n > 0.3 ? R.stone[2] : R.stone[1]);
       }
   }
   if (timbered) {
-    // Half-timbering: corner posts, a mid rail and a couple of braces.
-    b.fillRect(wx0, wallTop, 2, wallH, R.wood[1]);
-    b.fillRect(wx0 + w - 2, wallTop, 2, wallH, R.wood[1]);
-    b.fillRect(wx0, wallTop + Math.round(wallH / 2) - 1, w, 2, R.wood[1]);
-    b.line(wx0 + 2, wallTop + Math.round(wallH / 2) - 2, wx0 + 7, wallTop + 1, R.wood[1]);
-    b.line(wx0 + w - 3, wallTop + Math.round(wallH / 2) - 2, wx0 + w - 8, wallTop + 1, R.wood[1]);
+    for (const [x0, x1, y0, y1] of [
+      [cx - upperHalf, cx + upperHalf, wallTop, jettyY],
+      [cx - lowerHalf, cx + lowerHalf, jettyY, baseY],
+    ] as [number, number, number, number][]) {
+      b.fillRect(x0, y0, 2, y1 - y0, R.wood[1]);
+      b.fillRect(x1 - 2, y0, 2, y1 - y0, R.wood[1]);
+      const mid = y0 + Math.round((y1 - y0) / 2);
+      b.fillRect(x0, mid - 1, x1 - x0, 2, R.wood[1]);
+      b.line(x0 + 2, mid - 2, x0 + 8, y0 + 1, R.wood[1]);
+      b.line(x1 - 3, mid - 2, x1 - 9, y0 + 1, R.wood[1]);
+    }
   }
 
   // --- windows + door -----------------------------------------------------
   const winList: { x: number; y: number }[] = [];
-  const rowYs = storeys === 2 ? [wallTop + 7, wallTop + Math.round(wallH * 0.62)] : [wallTop + Math.round(wallH * 0.35)];
-  for (const wy of rowYs) {
+  const rows: [number, number][] =
+    storeys === 2
+      ? [
+          [wallTop + 8, upperHalf],
+          [jettyY + Math.round((baseY - jettyY) * 0.42), lowerHalf],
+        ]
+      : [[wallTop + Math.round(wallH * 0.38), upperHalf]];
+  for (const [wy, half] of rows) {
     for (let i = 0; i < windows; i++) {
       const t = (i + 1) / (windows + 1);
-      const wxp = Math.round(wx0 + t * w);
-      // Keep the ground-floor windows clear of the doorway.
-      if (door !== 'none' && wy > wallTop + wallH * 0.45 && Math.abs(wxp - cx) < 9) continue;
-      drawWindow(b, wxp, wy);
+      const wxp = Math.round(cx - half + t * half * 2);
+      if (door !== 'none' && wy > baseY - wallH * 0.55 && Math.abs(wxp - cx) < 10) continue;
+      drawWindow(b, wxp, wy, rng.chance(0.6), rng.chance(0.45));
       winList.push({ x: wxp - cx, y: wy - baseY });
     }
   }
   if (door !== 'none') {
-    const dx = door === 'center' ? cx : door === 'left' ? wx0 + 10 : wx0 + w - 10;
-    drawDoor(b, dx, baseY, 10, Math.min(15, wallH - 4));
+    const dx = door === 'center' ? cx : door === 'left' ? cx - lowerHalf + 10 : cx + lowerHalf - 10;
+    drawDoor(b, dx, baseY, 10, Math.min(16, baseY - jettyY - 2), rng.chance(0.5));
   }
 
   // --- roof ---------------------------------------------------------------
-  const rx0 = cx - Math.round(roofW / 2);
-  if (roof === 'thatch') thatch(b, rx0, roofTop, roofW, roofH, roofRamp, seed);
-  else if (roof === 'tile') tiles(b, rx0, roofTop, roofW, roofH, roofRamp);
-  else shingles(b, rx0, roofTop, roofW, roofH, roofRamp, seed);
-
-  // Ridge beam and the hard shadow the eave throws onto the wall.
-  b.hline(rx0, rx0 + roofW - 1, roofTop, roofRamp[4]);
-  b.hline(rx0, rx0 + roofW - 1, wallTop - 1, R.night[1]);
-  b.fillRect(wx0, wallTop, w, 1, shade(wall[3], -0.4));
+  gableRoof(b, cx, roofTop, roofH, eaveHalf, ridgeHalf, roofRamp, roof, seed);
+  // Hard shadow the eave throws onto the wall.
+  b.hline(cx - upperHalf, cx + upperHalf - 1, wallTop, R.night[1]);
+  for (let i = 0; i < dormers; i++) {
+    const t = (i + 1) / (dormers + 1);
+    dormer(b, Math.round(cx - eaveHalf * 0.6 + t * eaveHalf * 1.2), roofTop + Math.round(roofH * 0.5), roofRamp);
+  }
 
   // --- chimney ------------------------------------------------------------
   let chim: { x: number; y: number } | undefined;
   if (chimney) {
-    const chx = cx + Math.round(w * 0.28);
-    const chTop = roofTop - 7;
-    b.fillRect(chx - 3, chTop, 6, 11, R.stone[2]);
+    const chx = cx + Math.round(w * 0.3);
+    const chTop = roofTop - 9;
+    b.fillRect(chx - 3, chTop, 6, 13, R.stone[2]);
     b.fillRect(chx - 3, chTop, 6, 2, R.stone[3]);
     b.fillRect(chx - 4, chTop, 8, 2, R.stone[3]);
-    b.vline(chx + 2, chTop, chTop + 10, R.stone[1]);
+    b.vline(chx + 2, chTop, chTop + 12, R.stone[1]);
     b.fillRect(chx - 2, chTop + 1, 4, 1, R.night[0]);
     chim = { x: chx - cx, y: chTop - baseY };
+  }
+
+  // --- climbing ivy, to break a blank corner ------------------------------
+  if (ivy) {
+    const side = rng.chance(0.5) ? -1 : 1;
+    const ex = cx + side * (lowerHalf - 3);
+    for (let y = baseY - 2; y > wallTop + 4; y -= 2) {
+      const spread = Math.max(1, Math.round((baseY - y) / 10));
+      for (let k = 0; k < spread; k++) {
+        const px = ex - side * rng.int(0, 4);
+        b.set(px, y - rng.int(0, 1), rng.chance(0.5) ? R.leaf[1] : R.leaf[2]);
+        b.set(px - side, y, R.leaf[0]);
+      }
+    }
   }
 
   b.selOutline();
@@ -256,7 +337,7 @@ export function building(opts: BuildingOpts): Building {
     ay: baseY,
     windows: winList,
     chimney: chim,
-    solidW: w / 2,
+    solidW: lowerHalf + (lean === 'none' ? 0 : leanW * 0.6),
     solidH: wallH + roofH * 0.35,
   };
 }
@@ -560,10 +641,10 @@ function still(b: PixelBuffer, ax: number, ay: number): Sheet {
 
 export function bakeBuildings(): BuildingAssets {
   const cottages = [
-    building({ w: 52, wallH: 26, roofH: 26, wall: R.paper, roofRamp: R.wood, roof: 'thatch', windows: 2, chimney: true, seed: 3 }),
-    building({ w: 44, wallH: 24, roofH: 22, wall: R.sand, roofRamp: R.red, roof: 'tile', windows: 2, chimney: true, seed: 5 }),
-    building({ w: 60, wallH: 28, roofH: 28, wall: R.paper, roofRamp: R.wood, roof: 'shingle', windows: 3, chimney: true, seed: 7, stoneBase: true }),
-    building({ w: 40, wallH: 22, roofH: 20, wall: R.sand, roofRamp: R.wood, roof: 'thatch', windows: 1, chimney: false, seed: 11 }),
+    building({ w: 52, wallH: 28, roofH: 28, wall: R.paper, roofRamp: R.wood, roof: 'thatch', windows: 2, chimney: true, seed: 3, lean: 'right', ivy: true }),
+    building({ w: 44, wallH: 26, roofH: 24, wall: R.sand, roofRamp: R.red, roof: 'tile', windows: 2, chimney: true, seed: 5 }),
+    building({ w: 60, wallH: 34, roofH: 30, wall: R.paper, roofRamp: R.wood, roof: 'shingle', windows: 3, chimney: true, seed: 7, stoneBase: true, lean: 'left', dormers: 1 }),
+    building({ w: 40, wallH: 24, roofH: 22, wall: R.sand, roofRamp: R.wood, roof: 'thatch', windows: 1, chimney: true, seed: 11, ivy: true }),
   ];
   return {
     cottages,
@@ -579,6 +660,8 @@ export function bakeBuildings(): BuildingAssets {
       chimney: true,
       stoneBase: true,
       seed: 21,
+      lean: 'left',
+      dormers: 2,
     }),
     inn: building({
       w: 82,
@@ -592,6 +675,8 @@ export function bakeBuildings(): BuildingAssets {
       chimney: true,
       stoneBase: true,
       seed: 23,
+      dormers: 2,
+      ivy: true,
     }),
     smithy: building({
       w: 56,
@@ -605,8 +690,9 @@ export function bakeBuildings(): BuildingAssets {
       timbered: false,
       stoneBase: true,
       seed: 29,
+      lean: 'right',
     }),
-    shop: building({ w: 54, wallH: 30, roofH: 24, wall: R.paper, roofRamp: R.leaf, roof: 'tile', windows: 2, chimney: true, seed: 31 }),
+    shop: building({ w: 54, wallH: 34, roofH: 26, wall: R.paper, roofRamp: R.leaf, roof: 'tile', windows: 2, chimney: true, seed: 31, storeys: 2, dormers: 1 }),
     chapel: building({
       w: 46,
       wallH: 46,
@@ -634,6 +720,8 @@ export function bakeBuildings(): BuildingAssets {
       timbered: false,
       stoneBase: true,
       seed: 41,
+      lean: 'left',
+      dormers: 1,
     }),
     barn: building({
       w: 70,
