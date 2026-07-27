@@ -12,13 +12,14 @@ import { Input } from './engine/input';
 import { Camera, GAME_H, GAME_W, Screen } from './engine/screen';
 import { Slime } from './game/agents';
 import { linesFor } from './game/dialogue';
+import { CAST, Social, activeQuest, questProgress, workArea } from './game/social';
 import { Critter, Duck, Villager, gossip } from './game/npc';
 import { Lighting, type Light } from './game/lighting';
 import { Particles } from './game/particles';
 import { Player } from './game/player';
 import { Farm, CROPS, FARM, Soil } from './game/farm';
 import { TILE } from './art/farm';
-import { Inventory } from './game/inventory';
+import { Inventory, ITEMS } from './game/inventory';
 import { RoomBuilder, type Room } from './game/interior';
 import { Scene } from './game/scene';
 import { BRIDGE, MILL, WORLD_H, WORLD_W, bakeGround } from './game/terrain';
@@ -55,10 +56,37 @@ function start(): void {
     new Slime(assets, 1250, 880),
   ];
 
-  // Townsfolk: each spawn gets a skin, cycled so neighbours don't match.
+  // Background extras: unnamed, just there to fill the streets.
   const villagers = scene.villagerSpawns.map((sp, i) => {
     const anims = assets.npcs[i % assets.npcs.length];
     return new Villager(anims, sp.x, sp.y, sp.home, 1000 + i * 37, sp.kind, sp.stationary, sp.schedule);
+  });
+
+  // The named cast: each one posted to their own workplace with a full day.
+  const social = new Social();
+  const castOf = new Map<string, (typeof CAST)[number]>();
+  CAST.forEach((def, i) => {
+    const area = workArea(def.work, scene.areas);
+    const home = scene.homes[i % Math.max(1, scene.homes.length)] ?? area;
+    const square = scene.areas.square ?? area;
+    const v = new Villager(
+      assets.npcs[def.skin % assets.npcs.length],
+      (area.x0 + area.x1) / 2,
+      (area.y0 + area.y1) / 2,
+      area,
+      7000 + i * 101,
+      def.name,
+      false,
+      [
+        { from: 0, area: home, activity: 'sleep' },
+        { from: 0.26 + i * 0.005, area, activity: def.activity },
+        { from: 0.74 + i * 0.004, area: square, activity: 'socialise' },
+        { from: 0.86 + i * 0.004, area: home, activity: 'sleep' },
+      ],
+    );
+    v.castId = def.id;
+    castOf.set(def.id, def);
+    villagers.push(v);
   });
 
   const animalOf = (kind: string) =>
@@ -172,8 +200,70 @@ function start(): void {
       }
     }
     if (best) {
+      const def = best.castId ? castOf.get(best.castId) : undefined;
+      if (def) {
+        // Holding something they might want? Offer it as a gift.
+        const held = inv.slots[inv.selected];
+        const heldDef = held.item ? ITEMS[held.item] : null;
+        if (heldDef && !heldDef.tool && heldDef.use !== 'plant') {
+          const res = social.gift(def, held.item!, day);
+          if (res.accepted) inv.consumeSelected();
+          talk = { speaker: `${def.name}  ${hearts(def.id)}`, lines: res.lines };
+          best.showEmote(res.accepted ? 'note' : 'talk', 2.5);
+          return;
+        }
+        const res = social.talk(def, day);
+        talk = { speaker: `${def.name} - ${def.job}  ${hearts(def.id)}`, lines: res.lines };
+        best.showEmote('talk', 2.5);
+        return;
+      }
       talk = { speaker: best.name, lines: linesFor(best.name) };
       best.showEmote('talk', 2.5);
+      return;
+    }
+
+    // The notice board: take the current job, or hand it in.
+    if (!room && Math.hypot(scene.board.x - player.x, scene.board.y - player.y) < 26) {
+      const q = activeQuest();
+      if (!q) {
+        talk = { speaker: 'NOTICE BOARD', lines: ['NOTHING POSTED.', 'THE VALLEY IS QUIET.'] };
+        return;
+      }
+      if (!q.taken) {
+        q.taken = true;
+        talk = { speaker: `BOARD - ${q.title}`, lines: q.brief };
+        return;
+      }
+      const have = Object.entries(q.need).every(([item, n]) => inv.count(item) >= n);
+      if (!have) {
+        talk = { speaker: `BOARD - ${q.title}`, lines: questProgress(q, (i) => inv.count(i)) };
+        return;
+      }
+      for (const [item, n] of Object.entries(q.need)) {
+        let left = n;
+        for (const s2 of inv.slots) {
+          if (s2.item !== item || left <= 0) continue;
+          const take = Math.min(left, s2.count);
+          s2.count -= take;
+          left -= take;
+          if (s2.count <= 0) {
+            s2.item = null;
+            s2.count = 0;
+          }
+        }
+      }
+      q.done = true;
+      inv.gold += q.rewardGold;
+      social.get(q.rewardFriend).points += 30;
+      const next = activeQuest();
+      talk = {
+        speaker: `BOARD - ${q.title}`,
+        lines: [
+          `DONE. ${q.rewardGold}G AND THE`,
+          `THANKS OF ${q.from}.`,
+          next ? 'A NEW NOTICE IS UP.' : 'THE BOARD IS EMPTY NOW.',
+        ],
+      };
       return;
     }
     if (room && room.bed && Math.hypot(room.bed.x - player.x, room.bed.y - player.y) < 26) {
@@ -201,6 +291,12 @@ function start(): void {
         fx.sparks(c.x, c.y - 14, -Math.PI / 2, 10);
       }
     }
+  }
+
+  /** Hearts as a little run of filled/empty pips for the dialogue header. */
+  function hearts(id: string): string {
+    const n = social.hearts(id);
+    return '*'.repeat(n) + '-'.repeat(5 - n);
   }
 
   function nextDay(): void {
@@ -582,6 +678,12 @@ function start(): void {
       day,
       gold: inv.gold,
       energy,
+      quest: (() => {
+        const q = activeQuest();
+        if (!q) return null;
+        if (!q.taken) return `NOTICE: ${q.title}`;
+        return `${q.title}  ${questProgress(q, (i) => inv.count(i)).join('  ')}`;
+      })(),
     };
   }
 

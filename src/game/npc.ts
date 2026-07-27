@@ -149,6 +149,8 @@ export class Villager extends Agent {
   /** Villagers posted at a stall or forge stay put and just turn about. */
   readonly stationary: boolean;
   readonly name: string;
+  /** Set for the named cast; empty for background extras. */
+  castId = '';
   readonly schedule: ScheduleSlot[];
   private slot = -1;
   activity: Activity = 'wander';

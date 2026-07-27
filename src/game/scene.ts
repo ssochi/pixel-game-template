@@ -92,8 +92,12 @@ export class Scene {
   chest!: Deco;
   /** The shipping bin on the player's plot: `E` on it sells the day's produce. */
   bin!: Deco;
+  /** The notice board on the square, where quests are taken and handed in. */
+  board!: Deco;
   /** Doorsteps of the houses, used as villagers' homes. */
   readonly homes: Area[] = [];
+  /** Named work areas, so the cast in `social.ts` can be posted to them. */
+  readonly areas: Record<string, Area> = {};
   private lightSeed = 0;
   private doorSeed = 1;
   private rng = new RNG(20260727);
@@ -228,6 +232,10 @@ export class Scene {
     this.placeBuilding(b.shop, MAIN - 122, 600, 'general store', b.signs.shop, 'shop');
     this.placeBuilding(b.smithy, MAIN + 128, 604, 'smithy', b.signs.smith, 'smithy');
 
+    this.areas.forge = { x0: MAIN + 108, y0: 614, x1: MAIN + 152, y1: 632 };
+    this.areas.shop = { x0: MAIN - 142, y0: 610, x1: MAIN - 98, y1: 628 };
+    this.areas.tavern = { x0: MAIN + 108, y0: 462, x1: MAIN + 156, y1: 480 };
+
     // Forge fire spilling out of the smithy door.
     this.light({ x: MAIN + 128, y: 596, radius: 92, color: P.fire, intensity: 1.15, flicker: 0.35 });
     this.smoke.push({ x: MAIN + 150, y: 566, rate: 9 });
@@ -301,6 +309,9 @@ export class Scene {
       });
     });
 
+    // The quest board: the town's notice board, on the square.
+    this.board = this.add(p.sign, cx - 6, cy - 88, { solid: 5, label: 'notice board' });
+
     // A brazier for warmth and a couple of crates of goods.
     this.add(p.brazier, cx - 40, cy + 78, { solid: 7, label: 'brazier' });
     this.light({ x: cx - 40, y: cy + 54, radius: 100, color: P.fire, intensity: 1.05, flicker: 0.28 });
@@ -318,6 +329,7 @@ export class Scene {
 
     // Townsfolk milling about the square.
     const square: Area = { x0: PLAZA.x0 + 20, y0: PLAZA.y0 + 20, x1: PLAZA.x1 - 20, y1: PLAZA.y1 - 20 };
+    this.areas.square = square;
     for (let i = 0; i < 7; i++) {
       this.villagerSpawns.push({
         kind: 'townsfolk',
@@ -329,6 +341,7 @@ export class Scene {
     }
     // …and a few walking the streets.
     const street: Area = { x0: 545, y0: 180, x1: 590, y1: 880 };
+    this.areas.street = street;
     for (let i = 0; i < 5; i++) {
       this.villagerSpawns.push({
         kind: 'walker',
@@ -368,6 +381,7 @@ export class Scene {
     this.add(this.a.props.crates[1], mx - 22, my + 18, { solid: 8, label: 'grain sack' });
     this.add(b.cart, mx - 56, my - 6, { solid: 12, label: 'cart' });
     const millYard: Area = { x0: mx - 60, y0: my + 10, x1: mx + 20, y1: my + 40 };
+    this.areas.mill = millYard;
     this.villagerSpawns.push({
       kind: 'miller',
       x: mx - 20,
@@ -437,6 +451,7 @@ export class Scene {
     // Farmers working the fields.
     for (const f of FIELDS.slice(0, 3)) {
       const plot: Area = { x0: f.x0 + 12, y0: f.y0 + 12, x1: f.x1 - 12, y1: f.y1 - 12 };
+      if (!this.areas.field) this.areas.field = plot;
       this.villagerSpawns.push({
         kind: 'farmer',
         x: (f.x0 + f.x1) / 2,
@@ -447,6 +462,7 @@ export class Scene {
     }
     // A herder living with the animals.
     const padArea: Area = { x0: PADDOCK.x0 + 24, y0: PADDOCK.y0 + 24, x1: PADDOCK.x1 - 24, y1: PADDOCK.y1 - 24 };
+    this.areas.paddock = padArea;
     this.villagerSpawns.push({
       kind: 'herder',
       x: (PADDOCK.x0 + PADDOCK.x1) / 2,
@@ -547,6 +563,7 @@ export class Scene {
       x1: riverCenter(600) + riverHalf(600) + 30,
       y1: 640,
     };
+    this.areas.river = bank;
     this.villagerSpawns.push({
       kind: 'fisher',
       x: bank.x0 + 6,

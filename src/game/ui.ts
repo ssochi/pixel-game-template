@@ -21,6 +21,8 @@ export interface HudState {
   day: number;
   gold: number;
   energy: number;
+  /** One-line reminder of the job on the notice board. */
+  quest: string | null;
 }
 
 function panel(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, a = 0.72): void {
@@ -74,6 +76,12 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: HudState): void {
   drawText(ctx, day, GAME_W - textWidth(day) - 4, 22, '#cfe0f5');
   const gold = `${s.gold}G`;
   drawText(ctx, gold, GAME_W - textWidth(gold) - 4, 31, '#f0c261');
+
+  if (s.quest) {
+    const q = s.quest.slice(0, 46);
+    panel(ctx, 2, 24, textWidth(q) + 6, 9, 0.6);
+    drawText(ctx, q, 5, 26, '#8fd0a0');
+  }
 
   // Energy bar, bottom-right.
   const bw = 60;
