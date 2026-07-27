@@ -7,17 +7,22 @@
  */
 import { bakeAll } from './art/assets';
 import { P } from './art/palette';
-import { drawClip } from './art/sheet';
+import { drawClip, drawFrame } from './art/sheet';
 import { Input } from './engine/input';
 import { Camera, GAME_H, GAME_W, Screen } from './engine/screen';
 import { Slime } from './game/agents';
+import { linesFor } from './game/dialogue';
 import { Critter, Duck, Villager, gossip } from './game/npc';
 import { Lighting, type Light } from './game/lighting';
 import { Particles } from './game/particles';
-import { Player, type PlayerState } from './game/player';
+import { Player } from './game/player';
+import { Farm, CROPS, FARM, Soil } from './game/farm';
+import { TILE } from './art/farm';
+import { Inventory } from './game/inventory';
+import { RoomBuilder, type Room } from './game/interior';
 import { Scene } from './game/scene';
 import { BRIDGE, MILL, WORLD_H, WORLD_W, bakeGround } from './game/terrain';
-import { Gallery, drawHud, drawInspect } from './game/ui';
+import { Gallery, drawDayCard, drawDialogue, drawHotbar, drawHud } from './game/ui';
 import { River } from './game/water';
 
 const boot = document.getElementById('boot') as HTMLDivElement;
@@ -38,9 +43,9 @@ function start(): void {
   const gallery = new Gallery(assets.gallery);
   const input = new Input(screen.canvas, (x, y) => screen.toInternal(x, y));
 
-  // Start on the high street, just west of the market square.
-  player.x = 480;
-  player.y = 505;
+  // Start at the gate of the player's own plot.
+  player.x = 690;
+  player.y = 650;
   camera.follow(player.x, player.y, WORLD_W, WORLD_H, 1, true);
 
   // Slimes only live in the woods across the river, away from the town.
@@ -73,13 +78,144 @@ function start(): void {
     (sp, i) => new Duck(assets.animals.duck, sp.x, sp.y, sp.home, 9000 + i * 71, 9),
   );
 
+  // --- farming, inventory, day -----------------------------------------------
+  const farm = new Farm();
+  const inv = new Inventory();
+  let day = 1;
+  let energy = 1;
+  /** Non-null while a dialogue box is open. */
+  let talk: { speaker: string; lines: string[] } | null = null;
+  /** 0..1 sleep transition; when it peaks the day rolls over. */
+  let sleepT = 0;
+  let sleeping = false;
+  let useCd = 0;
+
+  function useTool(): void {
+    const held = inv.held;
+    if (!held || energy <= 0) return;
+    // Act on the tile in front of the player.
+    const reach = 14;
+    const fx2 = player.x + Math.cos(player.aim) * reach;
+    const fy2 = player.y - 4 + Math.sin(player.aim) * reach;
+    const i = farm.indexAt(fx2, fy2);
+    let did = false;
+    if (i >= 0) {
+      const t = farm.tiles[i];
+      switch (held.use) {
+        case 'till':
+          did = farm.till(i);
+          if (did) fx.dust(fx2, fy2 + 6, 0, -1);
+          break;
+        case 'water':
+          did = farm.water(i);
+          if (did) fx.splash(fx2, fy2 + 4, 0.3);
+          break;
+        case 'plant':
+          if (held.crop && farm.plant(i, held.crop)) {
+            inv.consumeSelected();
+            did = true;
+          }
+          break;
+        case 'cut': {
+          const got = farm.harvest(i);
+          if (got) {
+            inv.add(got, 1);
+            fx.sparks(fx2, fy2, -Math.PI / 2, 6);
+            did = true;
+          } else if (t.crop) {
+            // Cutting an immature crop just destroys it.
+            t.crop = null;
+            t.stage = 0;
+            did = true;
+          } else {
+            did = farm.clear(i);
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    }
+    // Chopping and mining work anywhere: they harvest scenery.
+    if (!did && (held.use === 'chop' || held.use === 'mine')) {
+      const want = held.use === 'chop' ? 'tree' : 'rock';
+      for (const d of scene.decos) {
+        if (d.solid <= 0) continue;
+        if (Math.hypot(d.x - fx2, d.y - fy2) > 16) continue;
+        const isTree = d.solid === 7 && d.clip.sheet.fh > 40;
+        if ((want === 'tree') === isTree) {
+          inv.add(want === 'tree' ? 'wood' : 'stone', 1);
+          fx.sparks(d.x, d.y - 8, -Math.PI / 2, 5);
+          did = true;
+          break;
+        }
+      }
+    }
+    player.swing();
+    if (did) energy = Math.max(0, energy - 0.012);
+  }
+
+  /** E: talk to whoever is closest, open the chest, or go to bed. */
+  function interact(): void {
+    if (talk) {
+      talk = null;
+      return;
+    }
+    const crowd = room ? roomVillagers : villagers;
+    let best: Villager | null = null;
+    let bestD = 30;
+    for (const v of crowd) {
+      const d = Math.hypot(v.x - player.x, v.y - player.y);
+      if (d < bestD) {
+        bestD = d;
+        best = v;
+      }
+    }
+    if (best) {
+      talk = { speaker: best.name, lines: linesFor(best.name) };
+      best.showEmote('talk', 2.5);
+      return;
+    }
+    if (room && room.bed && Math.hypot(room.bed.x - player.x, room.bed.y - player.y) < 26) {
+      sleeping = true;
+      return;
+    }
+    if (!room) {
+      // Shipping bin: sells everything sellable in one go.
+      const bin = scene.bin;
+      if (Math.hypot(bin.x - player.x, bin.y - player.y) < 26) {
+        const earned = inv.sellProduce();
+        bin.clip = assets.props.chestOpen;
+        bin.phase = -time;
+        fx.sparks(bin.x, bin.y - 14, -Math.PI / 2, 10);
+        talk = {
+          speaker: 'SHIPPING BIN',
+          lines: earned > 0 ? [`SOLD FOR ${earned}G.`] : ['NOTHING TO SHIP TODAY.'],
+        };
+        return;
+      }
+      const c = scene.chest;
+      if (Math.hypot(c.x - player.x, c.y - player.y) < 26) {
+        c.clip = assets.props.chestOpen;
+        c.phase = -time;
+        fx.sparks(c.x, c.y - 14, -Math.PI / 2, 10);
+      }
+    }
+  }
+
+  function nextDay(): void {
+    day += 1;
+    farm.newDay();
+    energy = 1;
+    dayT = 0.26;
+  }
+
   // --- debug / display state ------------------------------------------------
   let dayT = 0.79; // start at dusk so the lights read immediately
   let dayPaused = false;
   let showGrid = false;
   let showColliders = false;
   let showHelp = true;
-  let inspect = true;
   let fps = 60;
   let fpsAcc = 0;
   let fpsFrames = 0;
@@ -94,6 +230,57 @@ function start(): void {
     { passive: false },
   );
 
+  // --- world / interior switching -------------------------------------------
+  const rooms = new RoomBuilder(assets);
+  let room: Room | null = null;
+  /** Where to put the player back down when they step outside again. */
+  let returnTo = { x: 0, y: 0 };
+  /** 0 = fully in, 1 = fully black. Drives the doorway wipe. */
+  let fade = 0;
+  let fadeDir = 0;
+  let pendingRoom: Room | null = null;
+  let pendingExit = false;
+  /** Interior NPCs, rebuilt whenever a room is entered. */
+  let roomVillagers: Villager[] = [];
+
+  function enterRoom(target: Room, doorX: number, doorY: number): void {
+    pendingRoom = target;
+    returnTo = { x: doorX, y: doorY + 14 };
+    fadeDir = 1;
+  }
+
+  function leaveRoom(): void {
+    pendingExit = true;
+    fadeDir = 1;
+  }
+
+  /** Called at the darkest point of the wipe. */
+  function applyTransition(): void {
+    if (pendingRoom) {
+      room = pendingRoom;
+      pendingRoom = null;
+      player.x = room.spawnX;
+      player.y = room.spawnY;
+      player.indoors = true;
+      player.stop();
+      roomVillagers = room.npcs.map((n, i) => {
+        const area = { x0: n.x - 10, y0: n.y - 4, x1: n.x + 10, y1: n.y + 4 };
+        return new Villager(assets.npcs[n.skin % assets.npcs.length], n.x, n.y, area, 4200 + i * 61, n.role, true);
+      });
+      camera.follow(player.x, player.y, room.w, room.h, 1, true);
+    } else if (pendingExit) {
+      pendingExit = false;
+      room = null;
+      roomVillagers = [];
+      player.x = returnTo.x;
+      player.y = returnTo.y;
+      player.indoors = false;
+      player.stop();
+      camera.follow(player.x, player.y, WORLD_W, WORLD_H, 1, true);
+    }
+    fadeDir = -1;
+  }
+
   const lights: Light[] = [];
   let time = 0;
   let last = performance.now();
@@ -106,6 +293,9 @@ function start(): void {
       camera,
       scene,
       villagers,
+      farm,
+      inv,
+      useTool,
       warp(x: number, y: number) {
         player.x = x;
         player.y = y;
@@ -133,33 +323,73 @@ function start(): void {
     if (input.pressed('g')) showGrid = !showGrid;
     if (input.pressed('c')) showColliders = !showColliders;
     if (input.pressed('h')) showHelp = !showHelp;
-    if (input.pressed('i')) inspect = !inspect;
     if (input.pressed('t')) dayPaused = !dayPaused;
     if (input.isDown('[')) dayT -= dt * 0.09;
     if (input.isDown(']')) dayT += dt * 0.09;
     if (input.pressed('k')) player.kill();
 
-    const forceMap: Record<string, PlayerState> = {
-      '1': 'idle',
-      '2': 'walk',
-      '3': 'run',
-      '4': 'attack',
-      '5': 'death',
-    };
-    for (const k of Object.keys(forceMap)) if (input.pressed(k)) player.forced = forceMap[k];
-    if (input.pressed('0')) player.forced = null;
+    // Hotbar
+    for (let i = 1; i <= 8; i++) if (input.pressed(String(i))) inv.select(i - 1);
+    if (wheel !== 0) {
+      inv.cycle(wheel > 0 ? 1 : -1);
+      wheel = 0;
+    }
+    if (input.pressed('e')) interact();
+    // Hold to keep working, on a cooldown — one swing per press is fiddly when
+    // you are tilling a whole row.
+    useCd -= dt;
+    if (!talk && useCd <= 0 && (input.mouseDown || input.isDown(' '))) {
+      useTool();
+      useCd = 0.34;
+    }
+    player.showGun = false;
 
     if (!dayPaused) dayT += dt / 150; // one full day every 2.5 minutes
 
-    // Chest interaction
-    if (input.pressed('e')) {
-      const c = scene.chest;
-      if (Math.hypot(c.x - player.x, c.y - player.y) < 26) {
-        c.clip = assets.props.chestOpen;
-        c.phase = -time;
-        c.label = 'chest (opened)';
-        fx.sparks(c.x, c.y - 14, -Math.PI / 2, 10);
+    // --- doorway wipe -------------------------------------------------------
+    if (fadeDir !== 0) {
+      fade += fadeDir * dt * 4.5;
+      if (fade >= 1 && fadeDir > 0) {
+        fade = 1;
+        applyTransition();
+      } else if (fade <= 0 && fadeDir < 0) {
+        fade = 0;
+        fadeDir = 0;
       }
+    }
+
+    // --- inside a building --------------------------------------------------
+    if (room) {
+      const r = room;
+      for (const v of roomVillagers) v.update(dt, r.solids, dayT);
+      fx.update(dt);
+      player.update(dt, input, camera.ix, camera.iy, r.solids, fx, camera);
+      player.updateBullets(dt, r.solids, fx);
+      // Confine the player to the room.
+      player.x = Math.max(r.bounds.x0, Math.min(r.bounds.x1, player.x));
+      player.y = Math.max(r.bounds.y0, Math.min(r.bounds.y1, player.y));
+      if (
+        fadeDir === 0 &&
+        player.x > r.exit.x &&
+        player.x < r.exit.x + r.exit.w &&
+        player.y > r.exit.y
+      ) {
+        leaveRoom();
+      }
+      camera.update(dt);
+      camera.follow(player.x, player.y - 8, r.w, r.h, dt);
+      return;
+    }
+
+    // Sleeping: fade right down, roll the day over, fade back up.
+    if (sleeping) {
+      sleepT += dt * 1.1;
+      if (sleepT >= 1 && sleepT - dt * 1.1 < 1) nextDay();
+      if (sleepT >= 2) {
+        sleepT = 0;
+        sleeping = false;
+      }
+      return;
     }
 
     for (const v of villagers) v.update(dt, scene.solids, dayT);
@@ -176,6 +406,16 @@ function start(): void {
 
     player.update(dt, input, camera.ix, camera.iy, scene.solids, fx, camera);
     player.updateBullets(dt, scene.solids, fx);
+
+    // Walking into a doorway takes you inside.
+    if (fadeDir === 0) {
+      for (const d of scene.doors) {
+        if (player.x > d.x && player.x < d.x + d.w && player.y > d.y && player.y < d.y + d.h) {
+          enterRoom(rooms.get(d.kind as never, d.seed), d.x + d.w / 2, d.y + d.h);
+          break;
+        }
+      }
+    }
 
     // Bullets vs slimes
     for (const b of player.bullets) {
@@ -207,6 +447,16 @@ function start(): void {
       return;
     }
 
+    if (room) {
+      renderRoom(room, camX, camY);
+      drawFade();
+      drawHud(ctx, hudState());
+      drawHotbar(ctx, assets, inv);
+      if (talk) drawDialogue(ctx, talk.speaker, talk.lines);
+      if (sleeping) drawDayCard(ctx, day, Math.min(1, sleepT < 1 ? sleepT : 2 - sleepT));
+      return;
+    }
+
     // 1. baked ground
     ctx.drawImage(ground, camX, camY, GAME_W, GAME_H, 0, 0, GAME_W, GAME_H);
     // 2. animated river
@@ -220,9 +470,34 @@ function start(): void {
       drawClip(ctx, d.clip, time + d.phase, d.x - camX, d.y - camY, d.flip);
     }
 
+    // 3b. the farm plot: soil tiles are flat, crops sort with everything else.
+    if (
+      FARM.x1 > camX - 32 &&
+      FARM.x0 < camX + GAME_W + 32 &&
+      FARM.y1 > camY - 32 &&
+      FARM.y0 < camY + GAME_H + 32
+    ) {
+      for (let i = 0; i < farm.tiles.length; i++) {
+        const t = farm.tiles[i];
+        if (t.soil === Soil.Wild) continue;
+        const o = farm.tileOrigin(i);
+        drawFrame(ctx, t.watered ? assets.farm.soilWet : assets.farm.soilDry, 0, o.x - camX, o.y - camY);
+      }
+    }
+
     // 4. y-sorted world
     type Item = { y: number; draw: () => void };
     const items: Item[] = [];
+    for (let i = 0; i < farm.tiles.length; i++) {
+      const t = farm.tiles[i];
+      if (!t.crop) continue;
+      const o = farm.tileOrigin(i);
+      const sheet = assets.farm.crops[CROPS[t.crop].kind][t.stage];
+      const bx = o.x + TILE / 2;
+      const by = o.y + TILE - 3;
+      if (bx < camX - 32 || bx > camX + GAME_W + 32 || by < camY - 40 || by > camY + GAME_H + 40) continue;
+      items.push({ y: by, draw: () => drawFrame(ctx, sheet, 0, bx - camX, by - camY) });
+    }
     for (const d of scene.decos) {
       if (d.layer !== 'sorted') continue;
       if (d.x < camX - pad || d.x > camX + GAME_W + pad || d.y < camY - pad || d.y > camY + GAME_H + pad) continue;
@@ -282,20 +557,15 @@ function start(): void {
       ctx.strokeRect(BRIDGE.x0 - camX, BRIDGE.y0 - camY, BRIDGE.x1 - BRIDGE.x0, BRIDGE.y1 - BRIDGE.y0);
     }
 
-    // 8. hover label for whatever the cursor is over
-    if (inspect) {
-      const mx = input.mouseX + camX;
-      const my = input.mouseY + camY;
-      let best: { d: number; label: string; x: number; y: number } | null = null;
-      for (const d of scene.decos) {
-        if (!d.label) continue;
-        const dist = Math.hypot(d.x - mx, d.y - 8 - my);
-        if (dist < 16 && (!best || dist < best.d)) best = { d: dist, label: d.label, x: d.x, y: d.y };
-      }
-      if (best) drawInspect(ctx, best.label, best.x - camX, best.y - camY - 12);
-    }
+    drawFade();
+    drawHud(ctx, hudState());
+    drawHotbar(ctx, assets, inv);
+    if (talk) drawDialogue(ctx, talk.speaker, talk.lines);
+    if (sleeping) drawDayCard(ctx, day, Math.min(1, sleepT < 1 ? sleepT : 2 - sleepT));
+  }
 
-    drawHud(ctx, {
+  function hudState() {
+    return {
       fps: Math.round(fps),
       dayT,
       lighting: lighting.enabled,
@@ -303,10 +573,50 @@ function start(): void {
       paused: dayPaused,
       playerState: player.state,
       forced: player.forced,
-      entities: scene.decos.length + slimes.length + villagers.length + animals.length + ducks.length + 1,
+      entities: room
+        ? room.decos.length + roomVillagers.length + 1
+        : scene.decos.length + slimes.length + villagers.length + animals.length + ducks.length + 1,
       particles: fx.list.length,
       showHelp,
-    });
+      place: room ? room.kind.toUpperCase() : 'OUTSIDE',
+      day,
+      gold: inv.gold,
+      energy,
+    };
+  }
+
+  function drawFade(): void {
+    if (fade <= 0) return;
+    ctx.fillStyle = `rgba(6,7,12,${fade.toFixed(3)})`;
+    ctx.fillRect(0, 0, GAME_W, GAME_H);
+  }
+
+  /** Interiors reuse the outdoor pipeline: ground, y-sorted props, lighting. */
+  function renderRoom(r: Room, camX: number, camY: number): void {
+    ctx.fillStyle = '#06070c';
+    ctx.fillRect(0, 0, GAME_W, GAME_H);
+    ctx.drawImage(r.ground, camX, camY, GAME_W, GAME_H, 0, 0, GAME_W, GAME_H);
+
+    for (const d of r.decos) {
+      if (d.layer !== 'ground') continue;
+      drawClip(ctx, d.clip, time + d.phase, d.x - camX, d.y - camY, d.flip);
+    }
+    type Item = { y: number; draw: () => void };
+    const items: Item[] = [];
+    for (const d of r.decos) {
+      if (d.layer !== 'sorted') continue;
+      items.push({ y: d.sortY, draw: () => drawClip(ctx, d.clip, time + d.phase, d.x - camX, d.y - camY, d.flip) });
+    }
+    for (const v of roomVillagers) items.push({ y: v.sortY, draw: () => v.draw(ctx, camX, camY, assets.emotes) });
+    items.push({ y: player.y, draw: () => player.draw(ctx, camX, camY) });
+    items.sort((a, b) => a.y - b.y);
+    for (const it of items) it.draw();
+    fx.draw(ctx, camX, camY);
+
+    lights.length = 0;
+    lights.push(...r.lights);
+    player.lights(lights);
+    lighting.renderInterior(ctx, lights, camX, camY, GAME_W, GAME_H, time, r.ambient);
   }
 
   function frame(now: number): void {

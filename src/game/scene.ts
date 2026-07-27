@@ -16,6 +16,7 @@ import { bakeSheet } from '../art/sheet';
 import { RNG } from '../engine/rng';
 import type { Light } from './lighting';
 import type { Area, ScheduleSlot } from './npc';
+import { FARM } from './farm';
 import {
   BRIDGE,
   FIELDS,
@@ -51,6 +52,17 @@ export interface Solid {
   r: number;
 }
 
+/** A doorway the player can walk into. */
+export interface Door {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  kind: string;
+  seed: number;
+  label: string;
+}
+
 export interface SmokeSource {
   x: number;
   y: number;
@@ -73,13 +85,17 @@ export class Scene {
   readonly solids: Solid[] = [];
   readonly waterObstacles: WaterObstacle[] = [];
   readonly smoke: SmokeSource[] = [];
+  readonly doors: Door[] = [];
   readonly villagerSpawns: Spawn[] = [];
   readonly animalSpawns: Spawn[] = [];
   readonly duckSpawns: Spawn[] = [];
   chest!: Deco;
+  /** The shipping bin on the player's plot: `E` on it sells the day's produce. */
+  bin!: Deco;
   /** Doorsteps of the houses, used as villagers' homes. */
   readonly homes: Area[] = [];
   private lightSeed = 0;
+  private doorSeed = 1;
   private rng = new RNG(20260727);
 
   constructor(private a: Assets) {
@@ -124,7 +140,14 @@ export class Scene {
    * Place a building: sprite, a wall of collision circles across its footprint,
    * a warm light behind each window and smoke from the chimney.
    */
-  private placeBuilding(bld: Building, x: number, y: number, label: string, sign?: Sheet): void {
+  private placeBuilding(
+    bld: Building,
+    x: number,
+    y: number,
+    label: string,
+    sign?: Sheet,
+    interior?: string,
+  ): void {
     const sheet = bakeSheet([bld.buffer], bld.ax, bld.ay);
     this.add(sheet, x, y, { label, sortY: y });
     // Collision: a row of circles along the wall base, so the player slides
@@ -132,7 +155,11 @@ export class Scene {
     const n = Math.max(2, Math.round(bld.solidW / 7));
     for (let i = 0; i <= n; i++) {
       const t = i / n;
-      this.solids.push({ x: x - bld.solidW + t * bld.solidW * 2, y: y - 8, r: 9 });
+      const sx = x - bld.solidW + t * bld.solidW * 2;
+      // Leave a gap in the wall where the door is, or the trigger is
+      // unreachable and the building can never be entered.
+      if (interior && Math.abs(sx - x) < 12) continue;
+      this.solids.push({ x: sx, y: y - 8, r: 9 });
     }
     // One light per window, kept deliberately weak: a building has three or
     // four of them and they stack, so anything stronger blows the facade out
@@ -152,6 +179,12 @@ export class Scene {
     if (sign) this.add(sign, x + bld.solidW - 4, y - 20, { sortY: y + 1, label: `${label} sign` });
     // The patch of street just outside the door: where residents go to sleep.
     this.homes.push({ x0: x - 12, y0: y + 6, x1: x + 12, y1: y + 16 });
+    if (interior) {
+      // The doorway itself: a narrow trigger sitting on the threshold. The
+      // collision circles above leave this gap, so you can only reach it by
+      // walking straight at the door.
+      this.doors.push({ x: x - 7, y: y - 6, w: 14, h: 10, kind: interior, seed: this.doorSeed++, label });
+    }
   }
 
   /**
@@ -178,6 +211,7 @@ export class Scene {
     this.buildMarket();
     this.buildMill();
     this.buildFarms();
+    this.buildFarmPlot();
     this.buildRiver();
     this.buildWilds();
   }
@@ -189,10 +223,10 @@ export class Scene {
     const MAIN = 565;
 
     // High street, west side: inn and tavern face the square.
-    this.placeBuilding(b.inn, MAIN - 118, 448, 'inn', b.signs.inn);
-    this.placeBuilding(b.tavern, MAIN + 130, 452, 'tavern', b.signs.tavern);
-    this.placeBuilding(b.shop, MAIN - 122, 600, 'general store', b.signs.shop);
-    this.placeBuilding(b.smithy, MAIN + 128, 604, 'smithy', b.signs.smith);
+    this.placeBuilding(b.inn, MAIN - 118, 448, 'inn', b.signs.inn, 'inn');
+    this.placeBuilding(b.tavern, MAIN + 130, 452, 'tavern', b.signs.tavern, 'tavern');
+    this.placeBuilding(b.shop, MAIN - 122, 600, 'general store', b.signs.shop, 'shop');
+    this.placeBuilding(b.smithy, MAIN + 128, 604, 'smithy', b.signs.smith, 'smithy');
 
     // Forge fire spilling out of the smithy door.
     this.light({ x: MAIN + 128, y: 596, radius: 92, color: P.fire, intensity: 1.15, flicker: 0.35 });
@@ -210,11 +244,11 @@ export class Scene {
       [MAIN + 120, 824, 2],
     ];
     for (const [x, y, kind] of rows) {
-      this.placeBuilding(b.cottages[kind], x, y, 'cottage');
+      this.placeBuilding(b.cottages[kind], x, y, 'cottage', undefined, 'cottage');
     }
 
     // Chapel on its own lane to the north-east.
-    this.placeBuilding(b.chapel, 860, 214, 'chapel');
+    this.placeBuilding(b.chapel, 860, 214, 'chapel', undefined, 'chapel');
 
     // Street lamps down the main street and along the high street.
     for (const [x, y] of [
@@ -320,7 +354,7 @@ export class Scene {
     const b = this.a.buildings;
     const mx = MILL.x;
     const my = MILL.y;
-    this.placeBuilding(b.mill, mx, my, 'watermill');
+    this.placeBuilding(b.mill, mx, my, 'watermill', undefined, 'mill');
 
     // The wheel hangs off the river side of the mill, its bottom in the water.
     const wheelX = mx + 44;
@@ -348,7 +382,7 @@ export class Scene {
     const p = this.a.props;
 
     // Barn beside the paddock.
-    this.placeBuilding(b.barn, 380, 800, 'barn');
+    this.placeBuilding(b.barn, 380, 800, 'barn', undefined, 'barn');
 
     // Crops, laid in rows that follow each field's furrows.
     for (const f of FIELDS) {
@@ -420,6 +454,26 @@ export class Scene {
       home: padArea,
       schedule: this.dayFor(padArea, 'work'),
     });
+  }
+
+  /** The player's own plot: fenced, with a shipping bin and a scarecrow. */
+  private buildFarmPlot(): void {
+    const p = this.a.props;
+    const step = 16;
+    for (let x = FARM.x0 - 8; x <= FARM.x1 + 8; x += step) {
+      // Gap on the west side, facing the town, so you can walk in.
+      if (Math.abs(x - (FARM.x0 - 8)) < 1) continue;
+      this.add(p.fence, x, FARM.y0 - 8, { solid: 6, label: 'fence' });
+      this.add(p.fence, x, FARM.y1 + 8, { solid: 6, label: 'fence' });
+    }
+    for (let y = FARM.y0 - 8; y <= FARM.y1 + 8; y += step) {
+      if (Math.abs(y - (FARM.y0 + 56)) < 10) continue; // gateway
+      this.add(p.fence, FARM.x0 - 8, y, { solid: 6, label: 'fence' });
+      this.add(p.fence, FARM.x1 + 8, y, { solid: 6, label: 'fence' });
+    }
+    this.bin = this.add(p.chestClosed, FARM.x0 - 20, FARM.y0 + 40, { solid: 8, label: 'shipping bin' });
+    this.add(this.a.buildings.scarecrow, FARM.x1 - 24, FARM.y0 + 8, { solid: 5, label: 'scarecrow' });
+    this.add(p.sign, FARM.x0 - 22, FARM.y0 + 70, { solid: 4, label: 'plot sign' });
   }
 
   private buildRiver(): void {
@@ -511,6 +565,7 @@ export class Scene {
       if (x > PLAZA.x0 - 24 && x < PLAZA.x1 + 24 && y > PLAZA.y0 - 24 && y < PLAZA.y1 + 24) return false;
       if (y > BRIDGE.y0 - 34 && y < BRIDGE.y1 + 34 && x > BRIDGE.x0 - 24 && x < BRIDGE.x1 + 24) return false;
       for (const f of FIELDS) if (x > f.x0 - 10 && x < f.x1 + 10 && y > f.y0 - 10 && y < f.y1 + 10) return false;
+      if (x > FARM.x0 - 26 && x < FARM.x1 + 26 && y > FARM.y0 - 26 && y < FARM.y1 + 26) return false;
       if (x > PADDOCK.x0 - 12 && x < PADDOCK.x1 + 12 && y > PADDOCK.y0 - 12 && y < PADDOCK.y1 + 12) return false;
       // Keep the streets clear.
       if (Math.abs(x - 565) < 46 && y > 120 && y < 900) return false;

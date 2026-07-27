@@ -55,8 +55,12 @@ export class Camera {
   follow(px: number, py: number, worldW: number, worldH: number, dt: number, snap = false): void {
     this.tx = px - GAME_W / 2;
     this.ty = py - GAME_H / 2;
-    this.tx = Math.max(0, Math.min(worldW - GAME_W, this.tx));
-    this.ty = Math.max(0, Math.min(worldH - GAME_H, this.ty));
+    // A world smaller than the viewport (an interior) is centred rather than
+    // clamped to zero, which would pin it to the top-left with black beside it.
+    this.tx =
+      worldW <= GAME_W ? -(GAME_W - worldW) / 2 : Math.max(0, Math.min(worldW - GAME_W, this.tx));
+    this.ty =
+      worldH <= GAME_H ? -(GAME_H - worldH) / 2 : Math.max(0, Math.min(worldH - GAME_H, this.ty));
     const k = snap ? 1 : 1 - Math.pow(0.0008, dt);
     this.x += (this.tx - this.x) * k;
     this.y += (this.ty - this.y) * k;

@@ -134,6 +134,43 @@ export class Lighting {
   }
 
   /**
+   * Interiors: a fixed ambient tint instead of the day/night curve. A room has
+   * no sky, so its base level comes from the room itself and the lamps and
+   * hearth do the rest.
+   */
+  renderInterior(
+    ctx: CanvasRenderingContext2D,
+    lights: Light[],
+    camX: number,
+    camY: number,
+    w: number,
+    h: number,
+    time: number,
+    ambient: [number, number, number],
+  ): void {
+    if (!this.enabled) return;
+    const m = this.mctx;
+    m.globalCompositeOperation = 'source-over';
+    m.globalAlpha = 1;
+    m.fillStyle = `rgb(${ambient[0]},${ambient[1]},${ambient[2]})`;
+    m.fillRect(0, 0, w, h);
+    m.globalCompositeOperation = 'lighter';
+    for (const l of lights) {
+      this.paint(m, l, Math.round(l.x - camX), Math.round(l.y - camY), this.lightAlpha(l, time), 1, 1);
+    }
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.drawImage(this.map, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    if (!this.bloom) return;
+    ctx.globalCompositeOperation = 'lighter';
+    for (const l of lights) {
+      if (l.bloom === false) continue;
+      this.paint(ctx, l, Math.round(l.x - camX), Math.round(l.y - camY), this.lightAlpha(l, time) * 0.3, 0.55, 1);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /**
    * Composite the light map over an already-rendered scene.
    * `ctx` must be the internal-resolution game context, untransformed.
    */

@@ -4,6 +4,8 @@ import { bakeBuildings, type BuildingAssets } from './buildings';
 import { bakeCharacter, bakeNpc, bakeGun, bakeMuzzleFlash, HERO_SKIN, NPC_SKINS, ROGUE_SKIN, type CharacterAnims } from './character';
 import { bakeSlime, type SlimeAnims } from './creatures';
 import { bakeEmotes, type EmoteAssets } from './emote';
+import { bakeFarm, type FarmAssets } from './farm';
+import { bakeInteriors, type InteriorAssets } from './interiors';
 import { bakeNature, type NatureAssets } from './nature';
 import { bakeProps, type PropAssets } from './props';
 import { P } from './palette';
@@ -23,6 +25,8 @@ export interface Assets {
   /** One idle/walk/work set per townsfolk skin. */
   npcs: CharacterAnims[];
   emotes: EmoteAssets;
+  interiors: InteriorAssets;
+  farm: FarmAssets;
   /** name -> clip, used by the asset gallery screen. */
   gallery: GalleryGroup[];
 }
@@ -62,6 +66,8 @@ export function bakeAll(): Assets {
   const animals = bakeAnimals();
   const npcs = NPC_SKINS.map((s) => bakeNpc(s));
   const emotes = bakeEmotes();
+  const interiors = bakeInteriors();
+  const farm = bakeFarm();
 
   const charEntries: GalleryEntry[] = [];
   for (const s of hero.sheets) {
@@ -193,6 +199,35 @@ export function bakeAll(): Assets {
       ]),
     },
     {
+      title: 'farming',
+      entries: [
+        fromSheet('soil dry', farm.soilDry),
+        fromSheet('soil wet', farm.soilWet),
+        ...(['turnip', 'pumpkin', 'wheat'] as const).flatMap((k) =>
+          farm.crops[k].map((sh, i) => fromSheet(`${k} ${i}`, sh)),
+        ),
+        ...Object.entries(farm.tools).map(([k, sh]) => fromSheet(k, sh)),
+      ],
+    },
+    {
+      title: 'interiors',
+      entries: [
+        fromSheet('shop counter', interiors.counterShop),
+        fromSheet('bar', interiors.counterBar),
+        ...interiors.shelves.map((sh, i) => fromSheet(`shelves ${i + 1}`, sh)),
+        { name: 'fireplace', clip: interiors.fireplace },
+        { name: 'anvil', clip: interiors.anvil },
+        { name: 'wall lamp', clip: interiors.wallLamp },
+        fromSheet('stool', interiors.stool),
+        fromSheet('keg', interiors.keg),
+        ...interiors.paintings.map((sh, i) => fromSheet(`painting ${i + 1}`, sh)),
+        fromSheet('pot plant', interiors.plant),
+        fromSheet('sacks', interiors.sacks),
+        fromSheet('stairs', interiors.stairs),
+        fromSheet('inner door', interiors.innerDoor),
+      ],
+    },
+    {
       title: 'light sources',
       entries: [
         { name: 'torch', clip: props.torch },
@@ -214,5 +249,5 @@ export function bakeAll(): Assets {
     },
   ];
 
-  return { hero, rogue, gun, muzzle, slime, nature, props, buildings, animals, npcs, emotes, gallery };
+  return { hero, rogue, gun, muzzle, slime, nature, props, buildings, animals, npcs, emotes, interiors, farm, gallery };
 }

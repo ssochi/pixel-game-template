@@ -1,8 +1,9 @@
-/** HUD, help panel and the full-screen asset gallery. */
-import type { GalleryGroup } from '../art/assets';
-import { drawClip, type Clip } from '../art/sheet';
+/** HUD, hotbar, dialogue box, help panel and the full-screen asset gallery. */
+import type { Assets, GalleryGroup } from '../art/assets';
+import { drawClip, drawFrame, type Clip } from '../art/sheet';
 import { drawText, textWidth } from '../engine/font';
 import { GAME_H, GAME_W } from '../engine/screen';
+import { HOTBAR_SIZE, ITEMS, iconFor, type Inventory } from './inventory';
 
 export interface HudState {
   fps: number;
@@ -15,6 +16,11 @@ export interface HudState {
   entities: number;
   particles: number;
   showHelp: boolean;
+  /** OUTSIDE, or the name of the room the player is standing in. */
+  place: string;
+  day: number;
+  gold: number;
+  energy: number;
 }
 
 function panel(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, a = 0.72): void {
@@ -37,11 +43,10 @@ function clock(dayT: number): string {
 const HELP: string[] = [
   'WASD / ARROWS  MOVE',
   'SHIFT          RUN',
-  'MOUSE          AIM',
-  'LMB / SPACE    SHOOT',
-  'K / R          DIE / REVIVE',
-  'E              USE CHEST',
-  '1-5 / 0        FORCE ANIM',
+  'LMB / SPACE    USE TOOL',
+  '1-8 / WHEEL    SELECT ITEM',
+  'E              TALK / USE',
+  'ENTER ON BED   SLEEP',
   'TAB            ASSET GALLERY',
   'L B            LIGHT / BLOOM',
   '[ ] T          TIME  -  + PAUSE',
@@ -62,6 +67,24 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: HudState): void {
 
   const flags = `${s.lighting ? 'LIGHT' : 'light'} ${s.bloom ? 'BLOOM' : 'bloom'}`;
   drawText(ctx, flags, GAME_W - textWidth(flags) - 4, 4, '#7f92b0');
+  drawText(ctx, s.place, GAME_W - textWidth(s.place) - 4, 13, '#f0c261');
+
+  // Day / money, top-right under the flags.
+  const day = `DAY ${s.day}`;
+  drawText(ctx, day, GAME_W - textWidth(day) - 4, 22, '#cfe0f5');
+  const gold = `${s.gold}G`;
+  drawText(ctx, gold, GAME_W - textWidth(gold) - 4, 31, '#f0c261');
+
+  // Energy bar, bottom-right.
+  const bw = 60;
+  const bx = GAME_W - bw - 6;
+  const by = GAME_H - 12;
+  panel(ctx, bx - 2, by - 2, bw + 4, 8, 0.6);
+  ctx.fillStyle = '#2a3346';
+  ctx.fillRect(bx, by, bw, 4);
+  const e = Math.max(0, Math.min(1, s.energy));
+  ctx.fillStyle = e > 0.3 ? '#7fd07f' : '#e0713c';
+  ctx.fillRect(bx, by, Math.round(bw * e), 4);
 
   if (s.showHelp) {
     const w = 92;
@@ -73,11 +96,67 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: HudState): void {
   }
 }
 
-export function drawInspect(ctx: CanvasRenderingContext2D, label: string, x: number, y: number): void {
-  if (!label) return;
-  const w = textWidth(label) + 6;
-  panel(ctx, x - w / 2, y - 12, w, 9, 0.8);
-  drawText(ctx, label, x - w / 2 + 3, y - 10, '#cfe0f5');
+/** Hotbar across the bottom of the screen. */
+export function drawHotbar(ctx: CanvasRenderingContext2D, a: Assets, inv: Inventory): void {
+  const slot = 22;
+  const w = HOTBAR_SIZE * slot;
+  const x0 = Math.round((GAME_W - w) / 2);
+  const y0 = GAME_H - slot - 3;
+  for (let i = 0; i < HOTBAR_SIZE; i++) {
+    const x = x0 + i * slot;
+    const sel = i === inv.selected;
+    ctx.fillStyle = sel ? 'rgba(30,38,54,0.95)' : 'rgba(12,15,24,0.85)';
+    ctx.fillRect(x, y0, slot - 2, slot - 2);
+    ctx.fillStyle = sel ? '#f0c261' : 'rgba(90,110,145,0.6)';
+    ctx.fillRect(x, y0, slot - 2, 1);
+    ctx.fillRect(x, y0 + slot - 3, slot - 2, 1);
+    ctx.fillRect(x, y0, 1, slot - 2);
+    ctx.fillRect(x + slot - 3, y0, 1, slot - 2);
+
+    const s = inv.slots[i];
+    if (s.item) {
+      const icon = iconFor(a, s.item);
+      if (icon) {
+        // Icons vary in size; scale the big ones down into the slot.
+        const k = Math.min(1, 14 / Math.max(icon.fw, icon.fh));
+        ctx.save();
+        ctx.translate(x + (slot - 2) / 2, y0 + (slot - 2) / 2 + 2);
+        if (k !== 1) ctx.scale(k, k);
+        drawFrame(ctx, icon, 0, 0, icon.ay - icon.fh / 2 + (icon.fh * 0) + icon.fh / 2 - icon.ay + icon.fh / 2);
+        ctx.restore();
+      }
+      if (!ITEMS[s.item].tool && s.count > 1) {
+        const label = String(s.count);
+        drawText(ctx, label, x + slot - 4 - textWidth(label), y0 + slot - 9, '#e8eef8');
+      }
+    }
+    drawText(ctx, String(i + 1), x + 2, y0 + 2, sel ? '#f0c261' : '#54617a', null);
+  }
+  // Name of the held item, above the bar.
+  const held = inv.held;
+  if (held) {
+    const n = held.name;
+    drawText(ctx, n, Math.round((GAME_W - textWidth(n)) / 2), y0 - 9, '#cfe0f5');
+  }
+}
+
+/** A Stardew-style dialogue box with a speaker name. */
+export function drawDialogue(ctx: CanvasRenderingContext2D, speaker: string, lines: string[]): void {
+  const h = 14 + lines.length * 8;
+  const y = GAME_H - h - 30;
+  panel(ctx, 12, y, GAME_W - 24, h, 0.92);
+  drawText(ctx, speaker.toUpperCase(), 18, y + 3, '#f0c261');
+  lines.forEach((l, i) => drawText(ctx, l, 18, y + 12 + i * 8, '#e8eef8'));
+  drawText(ctx, 'E', GAME_W - 24, y + h - 9, '#7f92b0');
+}
+
+/** Full-screen banner used for the day transition. */
+export function drawDayCard(ctx: CanvasRenderingContext2D, day: number, alpha: number): void {
+  ctx.fillStyle = `rgba(6,7,12,${alpha.toFixed(3)})`;
+  ctx.fillRect(0, 0, GAME_W, GAME_H);
+  if (alpha < 0.55) return;
+  const t = `DAY ${day}`;
+  drawText(ctx, t, Math.round((GAME_W - textWidth(t) * 2) / 2), GAME_H / 2 - 8, '#f0c261');
 }
 
 const CELL = 60;

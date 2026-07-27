@@ -54,6 +54,8 @@ export class Player {
   /** Set by the debug panel to force one animation for inspection. */
   forced: PlayerState | null = null;
 
+  /** Inside a room the world terrain must not be consulted at all. */
+  indoors = false;
   readonly bullets: Bullet[] = [];
   private stepT = 0;
   private splashT = 0;
@@ -88,12 +90,19 @@ export class Player {
     this.deathT = 0;
   }
 
+  /** Kill all momentum — used when teleporting through a doorway. */
+  stop(): void {
+    this.vx = 0;
+    this.vy = 0;
+    this.setState('idle');
+  }
+
   revive(): void {
     this.setState('idle');
     this.deathT = 0;
   }
 
-  update(dt: number, input: Input, camX: number, camY: number, solids: Solid[], fx: Particles, cam: Camera): void {
+  update(dt: number, input: Input, camX: number, camY: number, solids: Solid[], fx: Particles, _cam: Camera): void {
     this.stateT += dt;
     this.animT += dt;
 
@@ -157,7 +166,7 @@ export class Player {
     this.fireT -= dt;
     this.gunRecoil = Math.max(0, this.gunRecoil - dt * 26);
     if (this.muzzleT >= 0) this.muzzleT += dt;
-    if ((input.mouseDown || input.isDown(' ')) && this.fireT <= 0) this.fire(fx, cam);
+    // Firing is driven by the tool system now, not held straight off the mouse.
 
     // --- state -------------------------------------------------------------
     const moving = Math.hypot(this.vx, this.vy) > 8;
@@ -176,7 +185,7 @@ export class Player {
         this.stepT = 0.26;
         const nx = this.vx / Math.hypot(this.vx, this.vy);
         const ny = this.vy / Math.hypot(this.vx, this.vy);
-        if (!onBridge(this.x, this.y)) fx.dust(this.x, this.y, nx, ny);
+        if (!this.indoors && !onBridge(this.x, this.y)) fx.dust(this.x, this.y, nx, ny);
       }
     }
     // Walking along the waterline kicks up spray.
@@ -188,12 +197,24 @@ export class Player {
   }
 
   private nearWater(): boolean {
-    if (onBridge(this.x, this.y)) return false;
+    if (this.indoors || onBridge(this.x, this.y)) return false;
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
       if (isWater(this.x + Math.cos(a) * 9, this.y + Math.sin(a) * 9)) return true;
     }
     return false;
+  }
+
+  /** Play the tool-swing animation. Called when a tool is used. */
+  swing(): void {
+    this.setState('attack');
+    this.animT = 0;
+  }
+
+  /** Fire the gun — kept for the combat slot; not bound to the mouse. */
+  shoot(fx: Particles, cam: Camera): void {
+    if (this.fireT > 0) return;
+    this.fire(fx, cam);
   }
 
   private fire(fx: Particles, cam: Camera): void {
@@ -240,7 +261,7 @@ export class Player {
           }
         }
       }
-      if (!hit && isWater(b.x, b.y) && !onBridge(b.x, b.y)) {
+      if (!hit && !this.indoors && isWater(b.x, b.y) && !onBridge(b.x, b.y)) {
         fx.splash(b.x, b.y, 0.6);
         hit = true;
       }
@@ -251,7 +272,7 @@ export class Player {
   private moveAxis(dx: number, dy: number, solids: Solid[]): void {
     const nx = this.x + dx;
     const ny = this.y + dy;
-    if (blocksMovement(nx, ny) || blocksMovement(nx, ny - 4)) {
+    if (!this.indoors && (blocksMovement(nx, ny) || blocksMovement(nx, ny - 4))) {
       if (dx !== 0) this.vx = 0;
       else this.vy = 0;
       return;
@@ -309,8 +330,11 @@ export class Player {
     if (!aimingUp) this.drawGun(ctx, px, py);
   }
 
+  /** Set by the inventory: the gun is only drawn when it is the held item. */
+  showGun = false;
+
   private drawGun(ctx: CanvasRenderingContext2D, px: number, py: number): void {
-    if (this.state === 'death') return;
+    if (this.state === 'death' || !this.showGun) return;
     const handY = py - 14;
     const back = this.gunRecoil;
     ctx.save();
