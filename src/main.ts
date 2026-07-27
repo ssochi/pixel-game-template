@@ -18,12 +18,13 @@ import { Lighting, type Light } from './game/lighting';
 import { Particles } from './game/particles';
 import { Player } from './game/player';
 import { Farm, CROPS, FARM, Soil } from './game/farm';
+import { Fishing } from './game/fishing';
 import { TILE } from './art/farm';
 import { Inventory, ITEMS, SHOP_STOCK } from './game/inventory';
 import { RoomBuilder, type Room } from './game/interior';
 import { Scene } from './game/scene';
 import { BRIDGE, MILL, WORLD_H, WORLD_W, bakeGround } from './game/terrain';
-import { Gallery, drawDayCard, drawDialogue, drawHotbar, drawHud, drawShop } from './game/ui';
+import { Gallery, drawCatch, drawDayCard, drawDialogue, drawHotbar, drawHud, drawReel, drawShop } from './game/ui';
 import { River } from './game/water';
 
 const boot = document.getElementById('boot') as HTMLDivElement;
@@ -123,10 +124,24 @@ function start(): void {
   /** Index into SHOP_STOCK while the shop menu is open. */
   let shopOpen = false;
   let shopIndex = 0;
+  const fishing = new Fishing();
 
   function useTool(): void {
     const held = inv.held;
     if (!held || energy <= 0) return;
+    if (held.use === 'fish') {
+      // The rod owns the action button entirely: cast, then strike, then reel.
+      // `update` handles the reel, so all this has to do is start things.
+      if (fishing.state === 'idle') {
+        if (!fishing.cast(player.x, player.y - 4, player.aim)) {
+          talk = { speaker: 'YOU', lines: ['NO WATER WITHIN REACH.', 'GET CLOSER TO THE RIVER.'] };
+        } else {
+          player.swing();
+          energy = Math.max(0, energy - 0.006);
+        }
+      }
+      return;
+    }
     // Act on the tile in front of the player.
     const reach = 14;
     const fx2 = player.x + Math.cos(player.aim) * reach;
@@ -151,9 +166,14 @@ function start(): void {
           }
           break;
         case 'cut': {
+          // Peek before harvesting: `harvest` clears the tile, so taking the
+          // crop with a full bag would destroy it outright.
+          if (t.crop && t.stage >= 3 && !inv.add(CROPS[t.crop].yieldItem, 1)) {
+            talk = { speaker: 'YOU', lines: ['NO ROOM FOR THE HARVEST.', 'SHIP SOMETHING FIRST.'] };
+            break;
+          }
           const got = farm.harvest(i);
           if (got) {
-            inv.add(got, 1);
             fx.sparks(fx2, fy2, -Math.PI / 2, 6);
             did = true;
           } else if (t.crop) {
@@ -293,7 +313,10 @@ function start(): void {
       for (const f of scene.forage) {
         if (f.gone >= 0) continue;
         if (Math.hypot(f.deco.x - player.x, f.deco.y - player.y) > 20) continue;
-        if (!inv.add(f.item, 1)) break;
+        if (!inv.add(f.item, 1)) {
+          talk = { speaker: 'YOU', lines: ['MY BAG IS FULL.'] };
+          break;
+        }
         f.gone = day;
         f.deco.hidden = true; // off the draw lists until it regrows
         fx.sparks(f.deco.x, f.deco.y - 6, -Math.PI / 2, 5);
@@ -454,8 +477,18 @@ function start(): void {
         enterRoom(rooms.get(kind as never, seed), door ? door.x + door.w / 2 : player.x, door ? door.y + door.h : player.y);
       },
       leave: leaveRoom,
+      fishing,
       state() {
-        return { room: room?.kind ?? null, shopOpen, shopIndex, gold: inv.gold, day };
+        return {
+          room: room?.kind ?? null,
+          shopOpen,
+          shopIndex,
+          gold: inv.gold,
+          day,
+          fish: fishing.state,
+          hooked: fishing.hooked?.id ?? null,
+          progress: fishing.progress,
+        };
       },
     };
   }
@@ -495,8 +528,45 @@ function start(): void {
     if (input.isDown(']')) dayT += dt * 0.09;
     if (input.pressed('k')) player.kill();
 
+    // Tick the tool cooldown before anything can return early, or a cast — which
+    // holds the update loop for several seconds — leaves it frozen and the next
+    // cast silently does nothing until the timer finally drains.
+    useCd -= dt;
+
+    // A live cast owns the action button: the same key casts, strikes and
+    // reels, which is what keeps fishing a one-button activity.
+    if (fishing.active) {
+      const act = input.isDown(' ') || input.mouseDown;
+      if (input.pressed(' ') || input.pressed('e')) {
+        const r = fishing.strike();
+        if (r === 'hooked') fx.splash(fishing.floatX, fishing.floatY, 0.6);
+      }
+      if (input.pressed('q') || input.pressed('escape')) fishing.cancel();
+      const ev = fishing.update(dt, act);
+      if (ev === 'bite') fx.splash(fishing.floatX, fishing.floatY, 0.45);
+      else if (ev === 'caught' && fishing.result?.fish) {
+        const f = fishing.result.fish;
+        if (inv.add(f.id, 1)) {
+          social.get('wick').points += f.id === 'riverking' ? 20 : 1;
+          fx.sparks(player.x, player.y - 14, -Math.PI / 2, 10);
+          energy = Math.max(0, energy - 0.02);
+        } else {
+          // Landing a fish you cannot carry used to bin it without a word.
+          talk = { speaker: 'YOU', lines: ['YOUR BAG IS FULL.', 'IT SLIPS BACK INTO THE WATER.'] };
+        }
+      } else if (ev === 'lost' || ev === 'escaped') {
+        fx.splash(fishing.floatX, fishing.floatY, 0.35);
+      }
+      // Movement still runs so the world stays alive, but you cannot walk off.
+      player.stop();
+      for (const v of villagers) v.update(dt, scene.solids, dayT);
+      if (!dayPaused) dayT += dt / 150;
+      return;
+    }
+
     // Hotbar
-    for (let i = 1; i <= 8; i++) if (input.pressed(String(i))) inv.select(i - 1);
+    for (let i = 1; i <= 9; i++) if (input.pressed(String(i))) inv.select(i - 1);
+    if (input.pressed('0')) inv.select(9);
     if (wheel !== 0) {
       inv.cycle(wheel > 0 ? 1 : -1);
       wheel = 0;
@@ -504,7 +574,6 @@ function start(): void {
     if (input.pressed('e')) interact();
     // Hold to keep working, on a cooldown — one swing per press is fiddly when
     // you are tilling a whole row.
-    useCd -= dt;
     if (!talk && useCd <= 0 && (input.mouseDown || input.isDown(' '))) {
       useTool();
       useCd = 0.34;
@@ -627,7 +696,11 @@ function start(): void {
       drawHud(ctx, hudState());
       drawHotbar(ctx, assets, inv);
       if (talk) drawDialogue(ctx, talk.speaker, talk.lines);
-      if (shopOpen) drawShop(ctx, assets, SHOP_STOCK, shopIndex, inv.gold);
+      if (fishing.state === 'reel') drawReel(ctx, assets, fishing);
+    if (fishing.state === 'result' && fishing.result?.caught && fishing.result.fish) {
+      drawCatch(ctx, assets, fishing.result.fish);
+    }
+    if (shopOpen) drawShop(ctx, assets, SHOP_STOCK, shopIndex, inv.gold);
       if (sleeping) drawDayCard(ctx, day, Math.min(1, sleepT < 1 ? sleepT : 2 - sleepT));
       return;
     }
@@ -689,6 +762,25 @@ function start(): void {
     for (const a of animals) items.push({ y: a.sortY, draw: () => a.draw(ctx, camX, camY) });
     for (const d of ducks) items.push({ y: d.sortY, draw: () => d.draw(ctx, camX, camY) });
     items.push({ y: player.y, draw: () => player.draw(ctx, camX, camY) });
+    // Float and line. The line is drawn from the rod hand to the float so the
+    // cast reads as connected to the player rather than as a floating prop.
+    if (fishing.active && fishing.state !== 'result') {
+      const fp = fishing.floatPos();
+      const biting = fishing.state === 'bite';
+      items.push({
+        y: fp.y + 200, // always over the water, never sorted behind a ripple
+        draw: () => {
+          ctx.strokeStyle = 'rgba(226,236,248,0.55)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(Math.round(player.x - camX) + 0.5, Math.round(player.y - 16 - camY) + 0.5);
+          ctx.lineTo(Math.round(fp.x - camX) + 0.5, Math.round(fp.y - camY) + 0.5);
+          ctx.stroke();
+          drawClip(ctx, biting ? assets.fishing.floatBite : assets.fishing.float, time, fp.x - camX, fp.y - camY);
+          if (biting) drawClip(ctx, assets.fishing.alert, time, fp.x - camX, fp.y - camY - 14);
+        },
+      });
+    }
     items.sort((a, b) => a.y - b.y);
 
     fx.drawShadows(ctx, camX, camY);
@@ -739,6 +831,10 @@ function start(): void {
     drawHud(ctx, hudState());
     drawHotbar(ctx, assets, inv);
     if (talk) drawDialogue(ctx, talk.speaker, talk.lines);
+    if (fishing.state === 'reel') drawReel(ctx, assets, fishing);
+    if (fishing.state === 'result' && fishing.result?.caught && fishing.result.fish) {
+      drawCatch(ctx, assets, fishing.result.fish);
+    }
     if (shopOpen) drawShop(ctx, assets, SHOP_STOCK, shopIndex, inv.gold);
     if (sleeping) drawDayCard(ctx, day, Math.min(1, sleepT < 1 ? sleepT : 2 - sleepT));
   }
@@ -794,6 +890,25 @@ function start(): void {
     }
     for (const v of roomVillagers) items.push({ y: v.sortY, draw: () => v.draw(ctx, camX, camY, assets.emotes) });
     items.push({ y: player.y, draw: () => player.draw(ctx, camX, camY) });
+    // Float and line. The line is drawn from the rod hand to the float so the
+    // cast reads as connected to the player rather than as a floating prop.
+    if (fishing.active && fishing.state !== 'result') {
+      const fp = fishing.floatPos();
+      const biting = fishing.state === 'bite';
+      items.push({
+        y: fp.y + 200, // always over the water, never sorted behind a ripple
+        draw: () => {
+          ctx.strokeStyle = 'rgba(226,236,248,0.55)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(Math.round(player.x - camX) + 0.5, Math.round(player.y - 16 - camY) + 0.5);
+          ctx.lineTo(Math.round(fp.x - camX) + 0.5, Math.round(fp.y - camY) + 0.5);
+          ctx.stroke();
+          drawClip(ctx, biting ? assets.fishing.floatBite : assets.fishing.float, time, fp.x - camX, fp.y - camY);
+          if (biting) drawClip(ctx, assets.fishing.alert, time, fp.x - camX, fp.y - camY - 14);
+        },
+      });
+    }
     items.sort((a, b) => a.y - b.y);
     for (const it of items) it.draw();
     fx.draw(ctx, camX, camY);

@@ -5,6 +5,7 @@ import { bakeCharacter, bakeNpc, bakeGun, bakeMuzzleFlash, HERO_SKIN, NPC_SKINS,
 import { bakeSlime, type SlimeAnims } from './creatures';
 import { bakeEmotes, type EmoteAssets } from './emote';
 import { bakeFarm, type FarmAssets } from './farm';
+import { bakeFishing, type FishingAssets } from './fishing';
 import { bakeInteriors, type InteriorAssets } from './interiors';
 import { bakeNature, type NatureAssets } from './nature';
 import { bakeProps, type PropAssets } from './props';
@@ -27,6 +28,7 @@ export interface Assets {
   emotes: EmoteAssets;
   interiors: InteriorAssets;
   farm: FarmAssets;
+  fishing: FishingAssets;
   /** name -> clip, used by the asset gallery screen. */
   gallery: GalleryGroup[];
 }
@@ -68,6 +70,7 @@ export function bakeAll(): Assets {
   const emotes = bakeEmotes();
   const interiors = bakeInteriors();
   const farm = bakeFarm();
+  const fishing = bakeFishing();
 
   const charEntries: GalleryEntry[] = [];
   for (const s of hero.sheets) {
@@ -247,7 +250,32 @@ export function bakeAll(): Assets {
         fromSheet('scroll', props.scroll),
       ],
     },
+    {
+      title: 'fish',
+      entries: [
+        ...Object.entries(fishing.fish).map(([id, sh]) => fromSheet(id, sh)),
+        fromSheet('rod', fishing.rod),
+        { name: 'float', clip: fishing.float },
+        { name: 'float bite', clip: fishing.floatBite },
+      ],
+    },
   ];
 
-  return { hero, rogue, gun, muzzle, slime, nature, props, buildings, animals, npcs, emotes, interiors, farm, gallery };
+  return {
+    hero,
+    rogue,
+    gun,
+    muzzle,
+    slime,
+    nature,
+    props,
+    buildings,
+    animals,
+    npcs,
+    emotes,
+    interiors,
+    farm,
+    fishing,
+    gallery,
+  };
 }

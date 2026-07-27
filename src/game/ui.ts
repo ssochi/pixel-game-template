@@ -46,8 +46,9 @@ const HELP: string[] = [
   'WASD / ARROWS  MOVE',
   'SHIFT          RUN',
   'LMB / SPACE    USE TOOL',
-  '1-8 / WHEEL    SELECT ITEM',
+  '1-0 / WHEEL    SELECT ITEM',
   'E              TALK / USE',
+  'ROD + SPACE    CAST / REEL',
   'ENTER ON BED   SLEEP',
   'TAB            ASSET GALLERY',
   'L B            LIGHT / BLOOM',
@@ -138,7 +139,8 @@ export function drawHotbar(ctx: CanvasRenderingContext2D, a: Assets, inv: Invent
         drawText(ctx, label, x + slot - 4 - textWidth(label), y0 + slot - 9, '#e8eef8');
       }
     }
-    drawText(ctx, String(i + 1), x + 2, y0 + 2, sel ? '#f0c261' : '#54617a', null);
+    // Slot 10 is bound to `0`, so label it with the key you actually press.
+    drawText(ctx, i === 9 ? '0' : String(i + 1), x + 2, y0 + 2, sel ? '#f0c261' : '#54617a', null);
   }
   // Name of the held item, above the bar.
   const held = inv.held;
@@ -197,6 +199,93 @@ export function drawShop(
     drawText(ctx, p, x + w - textWidth(p) - 6, ry + 2, gold >= s.price ? '#f0c261' : '#6b7690');
   });
   drawText(ctx, 'W/S PICK   E BUY   TAB CLOSE', x + 6, y + h - 9, '#7f92b0');
+}
+
+/**
+ * The reeling minigame: a vertical track with the fish on it and the player's
+ * catch box over the top, plus a progress column beside it.
+ *
+ * It sits at the right edge rather than the centre so it never covers the
+ * float — you want to see the water you are fishing while you fight the fish.
+ */
+export function drawReel(
+  ctx: CanvasRenderingContext2D,
+  a: Assets,
+  f: { barY: number; boxH: number; fishY: number; progress: number; hooked: { id: string; name: string } | null },
+): void {
+  const trackH = 112;
+  const trackW = 14;
+  // Clear of the right edge and low enough to miss the top-right HUD block.
+  const x = GAME_W - 58;
+  const y = Math.round((GAME_H - trackH) / 2) + 6;
+
+  panel(ctx, x - 7, y - 13, trackW + 30, trackH + 22, 0.9);
+
+  // Track.
+  ctx.fillStyle = 'rgba(24,40,62,0.95)';
+  ctx.fillRect(x, y, trackW, trackH);
+
+  // `barY` is 0 at the bottom, so screen y counts the other way.
+  const toY = (v: number) => y + Math.round((1 - v) * trackH);
+
+  // The player's catch box.
+  const boxPx = Math.max(8, Math.round(f.boxH * trackH));
+  const boxTop = Math.min(y + trackH - boxPx, Math.max(y, toY(f.barY) - boxPx / 2));
+  const on = Math.abs(f.fishY - f.barY) <= f.boxH / 2;
+  ctx.fillStyle = on ? 'rgba(120,200,120,0.5)' : 'rgba(140,160,190,0.28)';
+  ctx.fillRect(x, boxTop, trackW, boxPx);
+  ctx.fillStyle = on ? '#8ede8e' : '#7f92b0';
+  ctx.fillRect(x, boxTop, trackW, 1);
+  ctx.fillRect(x, boxTop + boxPx - 1, trackW, 1);
+
+  // The fish itself, scaled down into the track.
+  const icon = f.hooked ? a.fishing.fish[f.hooked.id] : null;
+  if (icon) {
+    const k = Math.min(1, (trackW - 2) / icon.fw);
+    ctx.save();
+    ctx.translate(x + trackW / 2, toY(f.fishY));
+    if (k !== 1) ctx.scale(k, k);
+    drawFrame(ctx, icon, 0, 0, 0);
+    ctx.restore();
+  }
+
+  // Progress column: green filling from the bottom.
+  const px = x + trackW + 3;
+  ctx.fillStyle = 'rgba(24,40,62,0.95)';
+  ctx.fillRect(px, y, 5, trackH);
+  const ph = Math.round(f.progress * trackH);
+  ctx.fillStyle = f.progress > 0.66 ? '#8ede8e' : f.progress > 0.3 ? '#f0c261' : '#e06b6b';
+  ctx.fillRect(px, y + trackH - ph, 5, ph);
+
+  if (f.hooked) {
+    const n = f.hooked.name;
+    drawText(ctx, n.slice(0, 11), x - 5, y - 11, '#cfe0f5');
+  }
+}
+
+/** The "!" over the float, and the caught-fish banner. */
+export function drawCatch(
+  ctx: CanvasRenderingContext2D,
+  a: Assets,
+  fish: { id: string; name: string; price: number },
+): void {
+  const w = 140;
+  const h = 44;
+  const x = Math.round((GAME_W - w) / 2);
+  const y = Math.round(GAME_H * 0.3);
+  panel(ctx, x, y, w, h, 0.94);
+  drawText(ctx, 'CAUGHT!', x + 6, y + 5, '#f0c261');
+  const icon = a.fishing.fish[fish.id];
+  if (icon) {
+    const k = Math.min(1, 54 / icon.fw);
+    ctx.save();
+    ctx.translate(x + 40, y + 27);
+    if (k !== 1) ctx.scale(k, k);
+    drawFrame(ctx, icon, 0, 0, 0);
+    ctx.restore();
+  }
+  drawText(ctx, fish.name.slice(0, 14), x + 74, y + 19, '#e8eef8');
+  drawText(ctx, `${fish.price}G`, x + 74, y + 29, '#f0c261');
 }
 
 /** Full-screen banner used for the day transition. */

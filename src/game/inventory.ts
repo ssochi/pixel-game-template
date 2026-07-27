@@ -8,8 +8,9 @@
 import type { Assets } from '../art/assets';
 import type { CropKind } from '../art/farm';
 import type { Sheet } from '../art/sheet';
+import { FISH } from './fishing';
 
-export type ItemUse = 'till' | 'water' | 'chop' | 'mine' | 'cut' | 'plant' | 'none';
+export type ItemUse = 'till' | 'water' | 'chop' | 'mine' | 'cut' | 'plant' | 'fish' | 'none';
 
 export interface ItemDef {
   id: string;
@@ -28,6 +29,7 @@ export const ITEMS: Record<string, ItemDef> = {
   axe: { id: 'axe', name: 'AXE', use: 'chop', tool: true },
   pick: { id: 'pick', name: 'PICKAXE', use: 'mine', tool: true },
   scythe: { id: 'scythe', name: 'SCYTHE', use: 'cut', tool: true },
+  rod: { id: 'rod', name: 'FISHING ROD', use: 'fish', tool: true },
 
   turnipSeeds: { id: 'turnipSeeds', name: 'TURNIP SEEDS', use: 'plant', crop: 'turnip', price: 8, tool: false },
   pumpkinSeeds: { id: 'pumpkinSeeds', name: 'PUMPKIN SEEDS', use: 'plant', crop: 'pumpkin', price: 25, tool: false },
@@ -43,12 +45,20 @@ export const ITEMS: Record<string, ItemDef> = {
   flower: { id: 'flower', name: 'WILD FLOWER', use: 'none', price: 14, tool: false },
 };
 
+// Every species from the fishing table becomes an ordinary sellable, giftable
+// stack. Declaring them here rather than by hand keeps one source of truth for
+// prices — the fishing table sets them, the shipping bin reads them.
+for (const f of Object.values(FISH)) {
+  ITEMS[f.id] = { id: f.id, name: f.name, use: 'none', price: f.price, tool: false };
+}
+
 export interface Slot {
   item: string | null;
   count: number;
 }
 
-export const HOTBAR_SIZE = 8;
+/** 10 slots: keys 1-9 and 0. Eight was one short once the rod arrived. */
+export const HOTBAR_SIZE = 10;
 
 export class Inventory {
   readonly slots: Slot[] = Array.from({ length: HOTBAR_SIZE }, () => ({ item: null, count: 0 }));
@@ -61,8 +71,9 @@ export class Inventory {
     this.slots[2] = { item: 'axe', count: 1 };
     this.slots[3] = { item: 'pick', count: 1 };
     this.slots[4] = { item: 'scythe', count: 1 };
-    this.slots[5] = { item: 'turnipSeeds', count: 12 };
-    this.slots[6] = { item: 'wheatSeeds', count: 8 };
+    this.slots[5] = { item: 'rod', count: 1 };
+    this.slots[6] = { item: 'turnipSeeds', count: 12 };
+    this.slots[7] = { item: 'wheatSeeds', count: 8 };
   }
 
   get held(): ItemDef | null {
@@ -149,6 +160,8 @@ export const SHOP_STOCK: { item: string; price: number }[] = [
 export function iconFor(a: Assets, id: string): Sheet | null {
   const def = ITEMS[id];
   if (!def) return null;
+  if (id === 'rod') return a.fishing.rod;
+  if (a.fishing.fish[id]) return a.fishing.fish[id];
   if (def.tool) return a.farm.tools[id] ?? null;
   if (def.use === 'plant') return def.crop ? a.farm.seeds[def.crop as CropKind] : a.farm.tools.seeds;
   switch (id) {

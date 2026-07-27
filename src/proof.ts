@@ -54,6 +54,12 @@ function main(): void {
     add('chicken', an.chicken.idle.sheet, [0]);
     add('chick peck', an.chicken.graze.sheet, [1]);
     add('duck', an.duck.idle.sheet, [0, 2]);
+  } else if (group === 'fish') {
+    const fi = assets.fishing;
+    for (const [id, sh] of Object.entries(fi.fish)) add(id, sh, [0]);
+    add('rod', fi.rod, [0]);
+    add('float', fi.float.sheet, [0, 1, 4]);
+    add('alert', fi.alert.sheet, [0]);
   } else if (group === 'town') {
     const bd = assets.buildings;
     const sheetOf = (b: { buffer: import('./art/pixel').PixelBuffer; ax: number; ay: number }) =>
