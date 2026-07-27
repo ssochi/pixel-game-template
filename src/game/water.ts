@@ -6,23 +6,24 @@
  * what lets the flow bend with the riverbank, foam against the shoreline and
  * break around rocks.
  */
+import { R } from '../art/palette';
 import { fbm } from '../engine/rng';
 import { riverCenter, riverHalf } from './terrain';
 
 const NOISE = 128;
 
 /**
- * The surface is quantised to a fixed 6-step ramp and dithered between steps
- * with a Bayer matrix, so it bands like hand-drawn water instead of showing a
- * smooth 24-bit gradient.
+ * The surface is quantised to a 6-step ramp taken straight from the shared
+ * palette and dithered between steps with a Bayer matrix, so it bands like
+ * hand-drawn water and stays in the same colour world as every sprite.
  */
 const RAMP: [number, number, number][] = [
-  [14, 46, 76],
-  [22, 68, 104],
-  [34, 92, 132],
-  [58, 129, 168],
-  [104, 178, 205],
-  [199, 234, 245],
+  [R.water[0][0], R.water[0][1], R.water[0][2]],
+  [R.water[1][0], R.water[1][1], R.water[1][2]],
+  [R.water[2][0], R.water[2][1], R.water[2][2]],
+  [R.water[3][0], R.water[3][1], R.water[3][2]],
+  [R.water[4][0], R.water[4][1], R.water[4][2]],
+  [R.paper[3][0], R.paper[3][1], R.paper[3][2]],
 ];
 
 const BAYER = [
@@ -128,7 +129,7 @@ export class River {
         // Specular glints riding the crests.
         if (ripple > 0.78 && band > 0.15) foam = (ripple - 0.78) * 3.6;
         // Shore foam: a lacy line hugging the bank.
-        const shore = 1 - Math.min(1, depth / 6);
+        const shore = 1 - Math.min(1, depth / 4);
         if (shore > 0) {
           const lace = this.n(wx * 0.65, wy * 0.65 - flow * 0.55);
           foam = Math.max(foam, (shore * shore) * (0.5 + lace * 1.15));

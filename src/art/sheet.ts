@@ -23,7 +23,12 @@ export function bakeSheet(frames: PixelBuffer[], ax: number, ay: number): Sheet 
   cv.width = fw * frames.length;
   cv.height = fh;
   const ctx = cv.getContext('2d')!;
-  frames.forEach((f, i) => ctx.drawImage(f.toCanvas(), i * fw, 0));
+  frames.forEach((f, i) => {
+    // Single choke point for palette discipline: whatever a baker did while
+    // drawing, the sprite that reaches the screen only uses palette swatches.
+    f.quantize();
+    ctx.drawImage(f.toCanvas(), i * fw, 0);
+  });
   return { canvas: cv, fw, fh, count: frames.length, ax, ay };
 }
 

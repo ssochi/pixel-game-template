@@ -5,8 +5,8 @@
  * bank, the grass falloff and the collision test, so the art and the gameplay
  * can never disagree about where the water is.
  */
-import { P } from '../art/palette';
-import { PixelBuffer, mix, rgba, shade, type RGBA } from '../art/pixel';
+import { R } from '../art/palette';
+import { PixelBuffer, bayer, rampBand, shade, type RGBA } from '../art/pixel';
 import { RNG, fbm, hash2 } from '../engine/rng';
 
 export const WORLD_W = 960;
@@ -88,50 +88,138 @@ function inPlaza(x: number, y: number): boolean {
   return x > PLAZA.x0 && x < PLAZA.x1 && y > PLAZA.y0 && y < PLAZA.y1;
 }
 
-/** Cobblestone: brick lattice with per-stone tint and mortar gaps. */
+// ---------------------------------------------------------------------------
+// Ground painting
+//
+// The rule that matters here: a texture is made of a few *clusters* repeated in
+// a varied distribution, not of per-pixel random noise. Random pixels read as
+// TV static and blur the whole surface; a handful of 2-3px motifs scattered on
+// a jittered lattice, with bare negative space between them, reads as grass.
+// Everything is drawn from ramp steps with Bayer dithering between them, so the
+// ground uses about a dozen colours in total.
+// ---------------------------------------------------------------------------
+
+type Motif = string[];
+
+/** `l` = light step, `m` = base, `d` = dark step, `.` = leave the ground alone. */
+const GRASS_MOTIFS: Motif[] = [
+  ['l.l', '.l.'],
+  ['.l.', 'l.l'],
+  ['ll'],
+  ['l', 'l'],
+  ['.d.', 'd.d'],
+  ['dd'],
+];
+
+const DIRT_MOTIFS: Motif[] = [
+  ['l.', '.d'],
+  ['ll', '.d'],
+  ['d'],
+  ['dd'],
+  ['.l.', 'l.d'],
+];
+
+const SAND_MOTIFS: Motif[] = [['ll'], ['l'], ['.d', 'd.'], ['dd']];
+
+function stampMotif(
+  buf: PixelBuffer,
+  m: Motif,
+  x: number,
+  y: number,
+  light: RGBA,
+  base: RGBA,
+  dark: RGBA,
+  mask: (x: number, y: number) => boolean,
+): void {
+  for (let j = 0; j < m.length; j++) {
+    for (let i = 0; i < m[j].length; i++) {
+      const ch = m[j][i];
+      if (ch === '.') continue;
+      const px = x + i;
+      const py = y + j;
+      if (!mask(px, py)) continue;
+      buf.set(px, py, ch === 'l' ? light : ch === 'd' ? dark : base);
+    }
+  }
+}
+
+/**
+ * Scatter motifs on a jittered lattice. Cell size is always larger than the
+ * motifs, which is what guarantees clusters never merge into each other — the
+ * single most common way a hand-made texture turns into noise.
+ */
+function scatter(
+  buf: PixelBuffer,
+  cell: number,
+  seed: number,
+  motifs: Motif[],
+  light: RGBA,
+  base: RGBA,
+  dark: RGBA,
+  density: (x: number, y: number) => number,
+  mask: (x: number, y: number) => boolean,
+): void {
+  const rng = new RNG(seed);
+  for (let cy = 0; cy < WORLD_H; cy += cell) {
+    for (let cx = 0; cx < WORLD_W; cx += cell) {
+      const x = cx + rng.int(0, cell - 3);
+      const y = cy + rng.int(0, cell - 3);
+      if (!mask(x, y)) continue;
+      if (rng.next() > density(x, y)) continue;
+      stampMotif(buf, rng.pick(motifs), x, y, light, base, dark, mask);
+    }
+  }
+}
+
+/**
+ * Flagstones, not bricks.
+ *
+ * A perfectly regular offset-brick lattice reads as a *wall* when seen from
+ * above — which is exactly what the first version of this floor looked like.
+ * Row heights and column widths are jittered per row, corners are knocked off,
+ * and the stones only span two values so the floor stays quiet under the props.
+ */
 function cobble(x: number, y: number): RGBA {
-  const row = Math.floor(y / 8);
-  const off = (row % 2) * 6;
-  const cx = Math.floor((x + off) / 12);
-  const lx = (x + off) % 12;
-  const ly = y % 8;
-  if (lx === 0 || ly === 0) return P.stoneDeep;
-  const n = hash2(cx, row);
-  let c = mix(P.stoneDark, P.stoneLight, 0.25 + n * 0.55);
-  if (lx === 1 || ly === 1) c = shade(c, 0.16);
-  if (lx === 11 || ly === 7) c = shade(c, -0.18);
-  if (hash2(x, y) > 0.965) c = shade(c, -0.3);
-  return c;
-}
+  // Rows of varying height.
+  let row = 0;
+  let rowTop = 0;
+  for (;;) {
+    const h = 7 + Math.floor(hash2(row, 77) * 5);
+    if (y < rowTop + h) break;
+    rowTop += h;
+    row++;
+  }
+  const rowH = 7 + Math.floor(hash2(row, 77) * 5);
+  const ly = y - rowTop;
 
-function grassColor(x: number, y: number): RGBA {
-  const n = fbm(x * 0.035, y * 0.035, 3);
-  const m = fbm(x * 0.14 + 40, y * 0.14, 2);
-  let c = mix(P.leafDeep, P.leaf, 0.3 + n * 0.8);
-  if (m > 0.66) c = mix(c, P.leafLight, 0.45);
-  if (m < 0.3) c = mix(c, P.leafDeep, 0.5);
-  // Individual blades
-  const h = hash2(x, y);
-  if (h > 0.972) c = mix(c, P.leafLight, 0.7);
-  else if (h < 0.02) c = mix(c, P.leafDeep, 0.6);
-  return c;
-}
+  // Columns of varying width, offset per row.
+  const off = Math.floor(hash2(row, 31) * 16);
+  let col = 0;
+  let colLeft = -off;
+  for (;;) {
+    const w = 11 + Math.floor(hash2(col, row * 7 + 5) * 8);
+    if (x < colLeft + w) break;
+    colLeft += w;
+    col++;
+  }
+  const colW = 11 + Math.floor(hash2(col, row * 7 + 5) * 8);
+  const lx = x - colLeft;
 
-function dirtColor(x: number, y: number): RGBA {
-  const n = fbm(x * 0.06, y * 0.06, 3);
-  let c = mix(P.dirtDark, P.dirt, 0.25 + n * 0.9);
-  const h = hash2(x + 7, y + 3);
-  if (h > 0.985) c = mix(c, P.sand, 0.55); // pebble
-  else if (h < 0.015) c = shade(c, -0.25);
-  return c;
-}
+  const mortar = lx <= 0 || ly <= 0;
+  // Knock the corners off so stones look cut rather than tiled.
+  const corner = (lx <= 1 && ly <= 1) || (lx >= colW - 2 && ly <= 1) || (lx <= 1 && ly >= rowH - 2);
+  if (mortar || corner) return R.stone[0];
 
-function sandColor(x: number, y: number): RGBA {
-  const n = fbm(x * 0.08, y * 0.08, 2);
-  let c = mix(P.sandDark, P.sand, 0.2 + n * 1.0);
-  const h = hash2(x + 31, y + 17);
-  if (h > 0.98) c = mix(c, P.stoneLight, 0.5);
-  return c;
+  // Kept in the lower half of the ramp on purpose: the floor is the largest
+  // surface in the scene, so it has to sit *below* the props in value or every
+  // object standing on it loses its silhouette.
+  const n = hash2(col * 3 + 1, row * 5 + 2);
+  const base = n > 0.55 ? 2 : 1;
+  let step = base;
+  if (n > 0.94) step = 3;
+  if (lx === 1 || ly === 1) step = base + 1;
+  else if (lx >= colW - 1 || ly >= rowH - 1) step = base - 1;
+  return R.stone[Math.max(0, Math.min(4, step))];
 }
 
 /**
@@ -141,68 +229,105 @@ function sandColor(x: number, y: number): RGBA {
 export function bakeGround(): HTMLCanvasElement {
   const buf = new PixelBuffer(WORLD_W, WORLD_H);
   const rng = new RNG(1234);
+
+  const isSand = (x: number, y: number): boolean => {
+    const d = riverSDF(x, y);
+    return d >= 0 && d < 12 + fbm(x * 0.04, y * 0.04, 2) * 12;
+  };
+  const isPath = (x: number, y: number): boolean =>
+    !inPlaza(x, y) && distToPath(x, y) < 12 + fbm(x * 0.055, y * 0.055, 2) * 9;
+
+  // --- pass 1: flat base tones, dithered between two ramp steps -------------
   for (let y = 0; y < WORLD_H; y++) {
-    const cxr = riverCenter(y);
-    const half = riverHalf(y);
     for (let x = 0; x < WORLD_W; x++) {
-      const d = Math.abs(x - cxr) - half; // >0 on land
+      const d = riverSDF(x, y);
       let c: RGBA;
       if (d < 0) {
-        // Riverbed — mostly hidden under the animated water, but visible
-        // through the shallows at the edges.
-        const n = fbm(x * 0.1, y * 0.1, 2);
-        c = mix(P.sandDark, P.dirtDark, n);
+        // Riverbed — visible through the shallows at the edges.
+        c = rampBand(R.dirt, 0.25 + fbm(x * 0.06, y * 0.06, 2) * 0.4, x, y);
+      } else if (inPlaza(x, y)) {
+        c = cobble(x, y);
+        // Worn plaza edges break into dirt with a dithered boundary.
+        const edge = Math.min(x - PLAZA.x0, PLAZA.x1 - x, y - PLAZA.y0, PLAZA.y1 - y);
+        if (edge < 12 && bayer(x, y) < (1 - edge / 12) * fbm(x * 0.12, y * 0.12, 2) * 1.6) {
+          c = rampBand(R.dirt, 0.35 + fbm(x * 0.05, y * 0.05, 2) * 0.3, x, y);
+        }
+      } else if (isSand(x, y)) {
+        // Wet sand right at the waterline, dry sand further up.
+        c = d < 3 ? R.sand[2] : rampBand(R.sand, 0.5 + fbm(x * 0.05, y * 0.05, 2) * 0.45, x, y);
+      } else if (isPath(x, y)) {
+        c = rampBand(R.dirt, 0.35 + fbm(x * 0.05, y * 0.05, 2) * 0.35, x, y);
       } else {
-        const bankT = Math.min(1, d / (14 + fbm(x * 0.05, y * 0.05, 2) * 10));
-        const pathD = distToPath(x, y);
-        const plaza = inPlaza(x, y);
-        if (plaza) {
-          c = cobble(x, y);
-          // Worn edges of the plaza fade into dirt.
-          const edge = Math.min(x - PLAZA.x0, PLAZA.x1 - x, y - PLAZA.y0, PLAZA.y1 - y);
-          if (edge < 10 && fbm(x * 0.2, y * 0.2, 2) > 0.35 + edge * 0.05) c = dirtColor(x, y);
-        } else if (pathD < 13 + fbm(x * 0.09, y * 0.09, 2) * 8) {
-          c = dirtColor(x, y);
-          const t = pathD / 20;
-          if (t > 0.6) c = mix(c, grassColor(x, y), (t - 0.6) / 0.4);
-        } else {
-          c = grassColor(x, y);
-        }
-        if (bankT < 1) {
-          const s = sandColor(x, y);
-          const k = 1 - bankT;
-          c = mix(c, s, k * k * 0.95 + 0.05);
-        }
+        // Broad, slow tonal drift only — two steps of the grass ramp. All the
+        // detail comes from the clusters in pass 2.
+        const t = fbm(x * 0.018, y * 0.018, 2);
+        c = rampBand(R.grass, 0.28 + t * 0.55, x, y, 0.3);
       }
       buf.set(x, y, c);
     }
   }
 
-  // Scatter ground decals: cracks in the plaza, pebbles, and dark patches.
-  for (let i = 0; i < 220; i++) {
+  // --- pass 2: texture clusters --------------------------------------------
+  const onGrass = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H && riverSDF(x, y) >= 0 && !inPlaza(x, y) && !isSand(x, y) && !isPath(x, y);
+  const onDirt = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H && riverSDF(x, y) >= 0 && !inPlaza(x, y) && !isSand(x, y) && isPath(x, y);
+  const onSand = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H && riverSDF(x, y) >= 3 && isSand(x, y);
+
+  // Density varies over large distances so there are lush patches and bare
+  // patches instead of an even carpet of detail.
+  const grassDensity = (x: number, y: number): number => {
+    const t = fbm(x * 0.012 + 90, y * 0.012, 2);
+    return Math.max(0, t * 1.75 - 0.2);
+  };
+  scatter(buf, 7, 11, GRASS_MOTIFS, R.grass[4], R.grass[2], R.grass[1], grassDensity, onGrass);
+  scatter(buf, 11, 12, GRASS_MOTIFS, R.leaf[3], R.grass[2], R.grass[0], (x, y) => grassDensity(x, y) * 0.5, onGrass);
+  scatter(buf, 8, 21, DIRT_MOTIFS, R.sand[2], R.dirt[2], R.dirt[1], () => 0.5, onDirt);
+  scatter(buf, 9, 31, SAND_MOTIFS, R.sand[4], R.sand[3], R.sand[2], () => 0.4, onSand);
+
+  // --- pass 3: a few large-scale features ----------------------------------
+  // Cracks in the plaza, and worn dirt patches where the grass thins out.
+  for (let i = 0; i < 90; i++) {
     const x = rng.int(0, WORLD_W - 1);
     const y = rng.int(0, WORLD_H - 1);
     if (isWater(x, y)) continue;
     if (inPlaza(x, y)) {
       let px = x;
       let py = y;
-      for (let j = 0; j < rng.int(6, 20); j++) {
-        buf.blend(px, py, rgba(P.stoneDeep, 150));
+      for (let j = 0; j < rng.int(8, 24); j++) {
+        if (inPlaza(px, py)) buf.set(px, py, R.stone[1]);
         px += rng.int(-1, 1);
         py += rng.int(0, 1);
       }
-    } else if (rng.chance(0.5)) {
-      buf.ellipse(x, y, rng.range(2, 6), rng.range(1.4, 3.5), rgba(P.dirtDark, 60));
-    } else {
-      buf.ellipse(x, y, rng.range(1, 2.4), rng.range(0.8, 1.6), rgba(P.stoneDark, 170));
+    } else if (onGrass(x, y)) {
+      // A bare earth patch: dithered edge, so it doesn't look stamped on.
+      const rx = rng.range(5, 13);
+      const ry = rx * rng.range(0.5, 0.8);
+      for (let py = Math.floor(y - ry); py <= y + ry; py++)
+        for (let px = Math.floor(x - rx); px <= x + rx; px++) {
+          const dx = (px - x) / rx;
+          const dy = (py - y) / ry;
+          const dd = dx * dx + dy * dy;
+          if (dd > 1 || !onGrass(px, py)) continue;
+          if (dd > 0.55 && bayer(px, py) < (dd - 0.55) / 0.45) continue;
+          buf.set(px, py, rampBand(R.dirt, 0.3 + fbm(px * 0.08, py * 0.08, 2) * 0.3, px, py));
+        }
     }
   }
 
-  // Soft vignette-ish darkening at the map border so the play area reads.
+  // Border falloff so the play area reads as an island of interest.
   for (let y = 0; y < WORLD_H; y++) {
     for (let x = 0; x < WORLD_W; x++) {
       const edge = Math.min(x, y, WORLD_W - 1 - x, WORLD_H - 1 - y);
-      if (edge < 40) buf.blend(x, y, rgba(P.shadow, (1 - edge / 40) * 90));
+      if (edge >= 44) continue;
+      const t = 1 - edge / 44;
+      // Dithered darkening keeps the vignette on the palette instead of
+      // generating a smooth 24-bit gradient.
+      const c = buf.get(x, y);
+      const steps = t > 0.66 ? 2 : t > 0.3 ? 1 : 0;
+      const extra = bayer(x, y) < (t * 3) % 1 ? 1 : 0;
+      buf.set(x, y, shade(c, -(steps + extra) * 0.32));
     }
   }
   return buf.toCanvas();

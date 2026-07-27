@@ -6,7 +6,7 @@
  * (no rotation blur) while reading as a soft sway.
  */
 import { PixelBuffer, mix, rgba, shade, type RGBA } from './pixel';
-import { P } from './palette';
+import { P, R } from './palette';
 import { bakeSheet, clip, type Clip, type Sheet } from './sheet';
 import { RNG, fbm } from '../engine/rng';
 
@@ -56,7 +56,7 @@ export function grassTuft(seed: number): PixelBuffer {
     }
   }
   b.hline(3, 12, 13, rgba(P.leafDeep, 160));
-  b.outline(rgba(P.leafDeep, 210));
+  b.selOutline();
   return b;
 }
 
@@ -65,25 +65,30 @@ export function bush(seed: number): PixelBuffer {
   const b = new PixelBuffer(28, 24);
   const cx = 14;
   const cy = 15;
+
+  // Silhouette first (blocking), in the darkest value.
   for (let i = 0; i < 7; i++) {
     const a = (i / 7) * Math.PI * 2;
-    b.ellipse(cx + Math.cos(a) * 6, cy + Math.sin(a) * 3.2, rng.range(4.5, 6.5), rng.range(3.5, 5), P.leafDark);
+    b.ellipse(cx + Math.cos(a) * 6, cy + Math.sin(a) * 3.2, rng.range(4.5, 6.5), rng.range(3.5, 5), R.leaf[0]);
   }
-  b.ellipse(cx, cy - 1, 9, 6, P.leaf);
-  for (let i = 0; i < 26; i++) {
-    const a = rng.range(0, Math.PI * 2);
-    const r = rng.range(0, 1);
-    const x = cx + Math.cos(a) * 8 * r;
-    const y = cy - 2 + Math.sin(a) * 5 * r;
-    b.ellipse(x, y, rng.range(1, 2.4), rng.range(1, 2), y < cy - 1 ? P.leafLight : P.leafDark);
+  // Body value, inset from the bottom-right so the dark rim survives there.
+  b.ellipse(cx - 1, cy - 1.5, 8.5, 5.6, R.leaf[1]);
+  b.ellipse(cx - 1.5, cy - 2.5, 7, 4.4, R.leaf[2]);
+  // Directional light: leaf clumps only on the upper-left half. Shading that
+  // followed the outline all the way round would be pillow shading.
+  for (let i = 0; i < 16; i++) {
+    const a = rng.range(Math.PI * 0.75, Math.PI * 1.95);
+    const r = rng.range(0.25, 1);
+    const x = cx - 1 + Math.cos(a) * 7 * r;
+    const y = cy - 2 + Math.sin(a) * 4.5 * r;
+    b.ellipse(x, y, rng.range(1.2, 2.2), rng.range(1, 1.8), r > 0.7 ? R.leaf[3] : R.leaf[4]);
   }
-  // Berries
+  // Berries sit in the shaded half for contrast.
   for (let i = 0; i < 4; i++) {
-    b.set(Math.round(rng.range(6, 21)), Math.round(rng.range(11, 18)), P.flowerA);
+    b.set(Math.round(rng.range(9, 21)), Math.round(rng.range(13, 18)), P.flowerA);
   }
   b.groundShadow(cx, 21, 9, 2.5, 110);
-  b.outline(P.leafDeep);
-  b.rimLight(P.leafLight, 0.4);
+  b.selOutline();
   return b;
 }
 
@@ -99,7 +104,7 @@ export function flower(seed: number, color: RGBA): PixelBuffer {
   b.ellipse(x, topY, 2.2, 2.2, color);
   b.ellipse(x, topY, 1, 1, P.flowerB);
   b.set(x - 2, topY - 1, shade(color, 0.25));
-  b.outline(rgba(P.leafDeep, 200));
+  b.selOutline();
   return b;
 }
 
@@ -120,7 +125,7 @@ export function reed(seed: number): PixelBuffer {
       b.set(x - 1, py - 3, P.woodLight);
     }
   }
-  b.outline(rgba(P.leafDeep, 190));
+  b.selOutline();
   return b;
 }
 
@@ -133,7 +138,7 @@ export function lilyPad(seed: number): PixelBuffer {
   // notch
   b.fillRect(7, 5, 5, 2, [0, 0, 0, 0]);
   for (let i = 0; i < 3; i++) b.set(Math.round(rng.range(4, 10)), Math.round(rng.range(3, 6)), P.leafDeep);
-  b.outline(rgba(P.leafDeep, 220));
+  b.selOutline();
   return b;
 }
 
@@ -149,7 +154,7 @@ export function mushroom(seed: number, glow: boolean): PixelBuffer {
   for (let i = 0; i < 4; i++) {
     b.set(Math.round(rng.range(3, 11)), Math.round(rng.range(5, 8)), glow ? P.white : P.sand);
   }
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -198,7 +203,7 @@ export function tree(seed: number, kind: 'oak' | 'pine' | 'dead' = 'oak'): Pixel
         P.woodDark,
       );
     }
-    b.outline(P.ink);
+    b.selOutline();
     return b;
   }
 
@@ -214,12 +219,13 @@ export function tree(seed: number, kind: 'oak' | 'pine' | 'dead' = 'oak'): Pixel
       rad -= 3.6;
     }
     b.ellipse(cx, ty + 4, 3, 5, P.leafDark);
-    b.outline(P.ink);
+    b.selOutline();
     b.rimLight(P.leafLight, 0.3);
     return b;
   }
 
-  // Oak canopy: overlapping blobs + noise-based leaf clusters.
+  // Oak canopy. Built in value layers with a single light direction (upper
+  // left) rather than concentric rings, which would read as a green pillow.
   const cy = baseY - trunkH - 8;
   const blobs: [number, number, number][] = [
     [cx, cy, 15],
@@ -228,20 +234,31 @@ export function tree(seed: number, kind: 'oak' | 'pine' | 'dead' = 'oak'): Pixel
     [cx - 6, cy - 8, 9],
     [cx + 7, cy - 7, 9],
   ];
-  for (const [bx, by, r] of blobs) b.ellipse(bx, by, r, r * 0.82, P.leafDeep);
-  for (const [bx, by, r] of blobs) b.ellipse(bx, by - 1.5, r * 0.9, r * 0.72, P.leafDark);
-  for (const [bx, by, r] of blobs) b.ellipse(bx - r * 0.2, by - r * 0.3, r * 0.62, r * 0.48, P.leaf);
-  // Highlight speckles on the sun side.
-  for (let i = 0; i < 90; i++) {
-    const bx = cx + rng.range(-20, 20);
-    const by = cy + rng.range(-16, 12);
-    if (b.alphaAt(Math.round(bx), Math.round(by)) < 200) continue;
-    const n = fbm(bx * 0.28, by * 0.28, 2);
-    if (n > 0.58 && by < cy + 2) b.ellipse(bx, by, 1.4, 1.1, P.leafLight);
-    else if (n < 0.34) b.ellipse(bx, by, 1.2, 1, P.leafDeep);
+  // 1. Full silhouette in the darkest value.
+  for (const [bx, by, r] of blobs) b.ellipse(bx, by, r, r * 0.82, R.leaf[0]);
+  // 2. Body value, pushed up and left so the dark stays as a bottom-right rim.
+  for (const [bx, by, r] of blobs) b.ellipse(bx - r * 0.12, by - r * 0.16, r * 0.9, r * 0.72, R.leaf[1]);
+  for (const [bx, by, r] of blobs) b.ellipse(bx - r * 0.22, by - r * 0.3, r * 0.7, r * 0.54, R.leaf[2]);
+  // 3. Lit clumps: only on the upper-left of each blob, in repeating shapes.
+  for (const [bx, by, r] of blobs) {
+    const n = Math.round(r * 0.5);
+    for (let i = 0; i < n; i++) {
+      const a = rng.range(Math.PI * 0.8, Math.PI * 1.9);
+      const d = rng.range(0.2, 0.72);
+      const x = bx + Math.cos(a) * r * d;
+      const y = by + Math.sin(a) * r * 0.78 * d;
+      if (b.alphaAt(Math.round(x), Math.round(y)) < 200) continue;
+      b.ellipse(x, y, rng.range(1.6, 2.6), rng.range(1.2, 2), R.leaf[3]);
+      if (rng.chance(0.4)) b.ellipse(x - 0.8, y - 0.8, 1.2, 1, R.leaf[4]);
+    }
   }
-  b.outline(P.ink);
-  b.rimLight(P.leafLight, 0.35);
+  // 4. A few gaps where sky shows through, to break the solid mass.
+  for (let i = 0; i < 10; i++) {
+    const bx = cx + rng.range(-16, 16);
+    const by = cy + rng.range(-10, 8);
+    if (fbm(bx * 0.3, by * 0.3, 2) > 0.62) b.ellipse(bx, by, 1.6, 1.2, R.leaf[0]);
+  }
+  b.selOutline();
   return b;
 }
 
@@ -296,7 +313,7 @@ export function rock(seed: number, size: 'small' | 'mid' | 'big', mossy = false)
       if (fbm(x * 0.3, y * 0.3, 2) > 0.55) b.blend(x, y, rgba(P.moss, 220));
     }
   }
-  b.outline(P.ink);
+  b.selOutline();
   b.rimLight(P.stoneLight, 0.4);
   return b;
 }
@@ -329,7 +346,7 @@ export function crystalClip(seed: number): Clip {
       }
       b.set(Math.round(cx + ox), Math.round(tipY + 1), mix(P.white, P.magic, 1 - pulse * 0.6));
     }
-    b.outline(P.ink);
+    b.selOutline();
     // Inner glow overlay
     for (let y = 0; y < b.h; y++)
       for (let x = 0; x < b.w; x++)
@@ -351,7 +368,7 @@ export function stump(seed: number): PixelBuffer {
   b.ellipse(10, 6, 2, 0.9, P.wood);
   b.set(10, 6, P.woodDark);
   for (let y = 7; y < 14; y++) if (rng.chance(0.5)) b.set(rng.int(5, 14), y, P.woodPale);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -372,7 +389,7 @@ export function log(seed: number): PixelBuffer {
     b.set(x, y, rng.chance(0.5) ? P.woodDark : P.woodLight);
   }
   for (let i = 0; i < 8; i++) b.set(rng.int(6, 34), 5, P.moss);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 

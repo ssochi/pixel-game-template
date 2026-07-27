@@ -7,6 +7,8 @@
  * keeps the art crisp when the whole frame is upscaled with nearest-neighbour.
  */
 
+import { ALL_COLORS, R, type Ramp } from './palette';
+
 export type RGBA = [number, number, number, number];
 
 /** `#rgb`, `#rrggbb` or `#rrggbbaa` -> RGBA tuple. */
@@ -24,8 +26,37 @@ export function rgba(c: RGBA, a: number): RGBA {
   return [c[0], c[1], c[2], Math.round(a)];
 }
 
-/** Multiply/lift a colour towards black (t<0) or white (t>0). */
+// ---------------------------------------------------------------------------
+// Palette-aware colour maths
+// ---------------------------------------------------------------------------
+
+const key = (r: number, g: number, b: number): number => (r << 16) | (g << 8) | b;
+
+/** packed rgb -> which ramp it came from and at which step. */
+const RAMP_INDEX = new Map<number, { ramp: Ramp; i: number }>();
+for (const ramp of Object.values(R)) {
+  ramp.forEach((c, i) => {
+    const k = key(c[0], c[1], c[2]);
+    if (!RAMP_INDEX.has(k)) RAMP_INDEX.set(k, { ramp, i });
+  });
+}
+
+/**
+ * Step along the colour's own ramp instead of fading it towards black/white.
+ *
+ * This is the whole reason shadows here don't go muddy: `shade(green, -0.4)`
+ * lands on the ramp's cool, hue-shifted dark green rather than on a desaturated
+ * grey-green. Colours that aren't on the palette (mid-blend results) fall back
+ * to a plain lighten/darken and get snapped later by `quantize`.
+ */
 export function shade(c: RGBA, t: number): RGBA {
+  const found = RAMP_INDEX.get(key(c[0], c[1], c[2]));
+  if (found) {
+    const step = Math.round(t * 3.2);
+    const i = Math.max(0, Math.min(found.ramp.length - 1, found.i + step));
+    const out = found.ramp[i];
+    return [out[0], out[1], out[2], c[3]];
+  }
   if (t >= 0) {
     return [
       Math.round(c[0] + (255 - c[0]) * t),
@@ -36,6 +67,72 @@ export function shade(c: RGBA, t: number): RGBA {
   }
   const k = 1 + t;
   return [Math.round(c[0] * k), Math.round(c[1] * k), Math.round(c[2] * k), c[3]];
+}
+
+/** 4x4 ordered dither threshold — the retro way to blend two ramp steps. */
+const BAYER = [
+  [0, 8, 2, 10],
+  [12, 4, 14, 6],
+  [3, 11, 1, 9],
+  [15, 7, 13, 5],
+];
+
+export function bayer(x: number, y: number): number {
+  return (BAYER[y & 3][x & 3] + 0.5) / 16;
+}
+
+/**
+ * Sample a ramp at a continuous position, dithering across the two nearest
+ * steps. Use this anywhere a gradient is wanted — never `mix()`.
+ */
+export function rampPick(ramp: Ramp, t: number, x: number, y: number): RGBA {
+  const f = Math.max(0, Math.min(1, t)) * (ramp.length - 1);
+  let i = Math.floor(f);
+  if (f - i > bayer(x, y)) i++;
+  return ramp[Math.max(0, Math.min(ramp.length - 1, i))];
+}
+
+/**
+ * Like `rampPick`, but the ramp steps hold as *flat plateaus* and only the
+ * narrow band where two steps meet gets dithered.
+ *
+ * Dithering everywhere turns a large surface into a uniform screen-door
+ * texture. Flat areas next to textured ones is what makes ground read as
+ * ground — the negative space is doing as much work as the detail.
+ */
+export function rampBand(ramp: Ramp, t: number, x: number, y: number, softness = 0.42): RGBA {
+  const f = Math.max(0, Math.min(1, t)) * (ramp.length - 1);
+  let i = Math.floor(f);
+  const frac = f - i;
+  const lo = (1 - softness) / 2;
+  const hi = 1 - lo;
+  if (frac > hi) i++;
+  else if (frac > lo && bayer(x, y) < (frac - lo) / softness) i++;
+  return ramp[Math.max(0, Math.min(ramp.length - 1, i))];
+}
+
+const qcache = new Map<number, RGBA>();
+
+/** Nearest palette swatch, using the "redmean" approximation of perceptual distance. */
+export function quantizeColor(r: number, g: number, b: number): RGBA {
+  const k = key(r, g, b);
+  const hit = qcache.get(k);
+  if (hit) return hit;
+  let best = ALL_COLORS[0];
+  let bestD = Infinity;
+  for (const c of ALL_COLORS) {
+    const rm = (c[0] + r) * 0.5;
+    const dr = c[0] - r;
+    const dg = c[1] - g;
+    const db = c[2] - b;
+    const d = (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db;
+    if (d < bestD) {
+      bestD = d;
+      best = c;
+    }
+  }
+  qcache.set(k, best);
+  return best;
 }
 
 export function mix(a: RGBA, b: RGBA, t: number): RGBA {
@@ -327,6 +424,69 @@ export class PixelBuffer {
           }
         }
         if (touch) this.set(x, y, color);
+      }
+    }
+  }
+
+  /**
+   * Snap every pixel onto the palette.
+   *
+   * Blending and anti-aliased shape drawing invent hundreds of near-identical
+   * colours; at 1px they read as blur rather than as detail. Running this over
+   * a finished sprite is what enforces "a few colours, each with its own
+   * identity" no matter how the sprite was drawn. Alpha is left alone, but
+   * partial alpha is snapped to a 3-step ladder so edges stay crisp.
+   */
+  quantize(): void {
+    const d = this.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3];
+      if (a === 0) continue;
+      const c = quantizeColor(d[i], d[i + 1], d[i + 2]);
+      d[i] = c[0];
+      d[i + 1] = c[1];
+      d[i + 2] = c[2];
+      d[i + 3] = a < 40 ? 0 : a < 150 ? 128 : 255;
+    }
+  }
+
+  /**
+   * Selective outline ("sel-out").
+   *
+   * A single flat black key line around everything flattens a sprite and makes
+   * the whole set look stamped out. Instead the outline borrows the hue of the
+   * pixel it hugs and darkens it along that colour's ramp, and the top-left
+   * edges — the ones facing the key light — get a lighter line than the
+   * bottom-right ones.
+   */
+  selOutline(dark = 0.78, light = 0.5): void {
+    const src = this.clone();
+    const ink = R.night[0];
+    for (let y = 0; y < this.h; y++) {
+      for (let x = 0; x < this.w; x++) {
+        if (src.alphaAt(x, y) > 8) continue;
+        // Which side of the shape are we on?
+        const below = src.alphaAt(x, y + 1) > 128;
+        const right = src.alphaAt(x + 1, y) > 128;
+        const above = src.alphaAt(x, y - 1) > 128;
+        const leftN = src.alphaAt(x - 1, y) > 128;
+        if (!below && !right && !above && !leftN) continue;
+        const n = below
+          ? src.get(x, y + 1)
+          : right
+            ? src.get(x + 1, y)
+            : above
+              ? src.get(x, y - 1)
+              : src.get(x - 1, y);
+        // Lit side = the shape is below/right of us, i.e. we hug its top-left.
+        const lit = below || right;
+        const k = lit ? light : dark;
+        this.set(x, y, [
+          Math.round(n[0] + (ink[0] - n[0]) * k),
+          Math.round(n[1] + (ink[1] - n[1]) * k),
+          Math.round(n[2] + (ink[2] - n[2]) * k),
+          255,
+        ]);
       }
     }
   }

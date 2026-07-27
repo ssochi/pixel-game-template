@@ -169,8 +169,11 @@ export class Particles {
       if (pass === 1) ctx.globalCompositeOperation = 'lighter';
       for (const p of this.list) {
         if ((p.glow ? 1 : 0) !== pass) continue;
+        // `life` can start slightly above `maxLife` for randomised spawns, so
+        // the ramp position has to be clamped at both ends.
         const t = 1 - p.life / p.maxLife;
-        const c = p.colors[Math.min(p.colors.length - 1, Math.floor(t * p.colors.length))];
+        const idx = Math.max(0, Math.min(p.colors.length - 1, Math.floor(t * p.colors.length)));
+        const c = p.colors[idx];
         const a = p.life < 0.12 ? p.life / 0.12 : 1;
         ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${a.toFixed(2)})`;
         ctx.fillRect(Math.round(p.x - camX), Math.round(p.y - p.z - camY), p.size, p.size);

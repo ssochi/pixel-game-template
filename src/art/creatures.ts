@@ -29,7 +29,8 @@ function slimeFrame(squash: number, stretch: number, lift: number, color: RGBA, 
       const a = (i / 5) * Math.PI * 2;
       b.ellipse(AX + Math.cos(a) * (6 + s * 8), AY - 2 + Math.sin(a) * (2 + s * 3), 1.4, 1, rgba(color, 180 * alpha));
     }
-    b.outline(rgba(P.ink, 200 * alpha));
+    if (alpha >= 1) b.selOutline();
+    else b.outline(rgba(P.ink, 200 * alpha));
     return b;
   }
 
@@ -51,7 +52,8 @@ function slimeFrame(squash: number, stretch: number, lift: number, color: RGBA, 
   b.ellipse(AX + 3, ey, 1.8, 2, rgba(P.white, 240 * alpha));
   b.ellipse(AX - 3, ey + 0.4, 0.9, 1, rgba(P.ink, 255 * alpha));
   b.ellipse(AX + 3, ey + 0.4, 0.9, 1, rgba(P.ink, 255 * alpha));
-  b.outline(rgba(P.ink, 235 * alpha));
+  if (alpha >= 1) b.selOutline();
+  else b.outline(rgba(P.ink, 235 * alpha));
   b.rimLight(P.white, 0.25);
   return b;
 }

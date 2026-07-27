@@ -9,7 +9,7 @@
  * Frame layout: 32x36, anchor at the feet (16, 30).
  */
 import { PixelBuffer, mix, rgba, shade, type RGBA } from './pixel';
-import { P } from './palette';
+import { P, R } from './palette';
 import { bakeSheet, clip, type Clip, type Sheet } from './sheet';
 
 export const FRAME_W = 32;
@@ -63,30 +63,20 @@ export const ROGUE_SKIN: Skin = {
   skin: P.skin,
   skinDark: P.skinMid,
   hair: P.hairDark,
-  hairDark: P.ink,
-  coat: hexish('#5b3f7a'),
-  coatLight: hexish('#7a58a0'),
-  coatDark: hexish('#3a2751'),
+  hairDark: R.hair[0],
+  coat: R.purple[2],
+  coatLight: R.purple[3],
+  coatDark: R.purple[1],
   accent: P.gold,
   accentDark: P.goldDark,
-  pants: hexish('#2f3448'),
-  pantsDark: hexish('#1d2130'),
-  boot: hexish('#4a3326'),
-  bootDark: hexish('#2c1d15'),
+  pants: R.night[2],
+  pantsDark: R.night[1],
+  boot: R.wood[1],
+  bootDark: R.wood[0],
   ink: P.ink,
   hooded: true,
   cape: true,
 };
-
-function hexish(h: string): RGBA {
-  const s = h.slice(1);
-  return [
-    parseInt(s.slice(0, 2), 16),
-    parseInt(s.slice(2, 4), 16),
-    parseInt(s.slice(4, 6), 16),
-    255,
-  ];
-}
 
 export interface Pose {
   bob: number;
@@ -215,13 +205,14 @@ function drawTorso(buf: PixelBuffer, cx: number, shY: number, hipY: number, s: S
 
 function drawHead(buf: PixelBuffer, cx: number, cy: number, s: Skin, dir: Dir): void {
   const faceShift = dir === 1 ? 1 : 0;
-  // Skull
-  buf.ellipse(cx, cy, 4, 4.2, s.skin);
+  // Skull. Deliberately oversized relative to the body — a chunky head is what
+  // keeps a 22px-tall character readable when it is 3 screen-pixels wide.
+  buf.ellipse(cx, cy, 4.5, 4.6, s.skin);
   // Jaw shading
   for (let y = Math.floor(cy); y <= Math.ceil(cy + 4); y++) {
-    for (let x = Math.floor(cx - 4); x <= Math.ceil(cx + 4); x++) {
-      const dx = (x - cx) / 4;
-      const dy = (y - cy) / 4.2;
+    for (let x = Math.floor(cx - 5); x <= Math.ceil(cx + 5); x++) {
+      const dx = (x - cx) / 4.5;
+      const dy = (y - cy) / 4.6;
       if (dx * dx + dy * dy <= 1 && y >= cy + 2) buf.blend(x, y, rgba(s.skinDark, 150));
     }
   }
@@ -242,20 +233,20 @@ function drawHead(buf: PixelBuffer, cx: number, cy: number, s: Skin, dir: Dir): 
     return;
   }
   // Hair cap, then carve the face back out.
-  buf.ellipse(cx, cy - 1.3, 4.3, 3.8, s.hair);
-  buf.ellipse(cx, cy - 2.1, 4.1, 2.5, mix(s.hair, P.hairLight, 0.45));
+  buf.ellipse(cx, cy - 1.3, 4.8, 4.1, s.hair);
+  buf.ellipse(cx, cy - 2.2, 4.5, 2.7, mix(s.hair, P.hairLight, 0.45));
   if (dir !== 2) {
-    buf.ellipse(cx + faceShift, cy + 1.2, 3.4, 3.2, s.skin);
-    for (let y = Math.floor(cy + 2); y <= Math.ceil(cy + 4); y++)
-      for (let x = Math.floor(cx - 3); x <= Math.ceil(cx + 4); x++) {
-        const dx = (x - cx - faceShift) / 3.4;
-        const dy = (y - cy - 1.2) / 3.2;
+    buf.ellipse(cx + faceShift, cy + 1.3, 3.7, 3.4, s.skin);
+    for (let y = Math.floor(cy + 2); y <= Math.ceil(cy + 5); y++)
+      for (let x = Math.floor(cx - 4); x <= Math.ceil(cx + 5); x++) {
+        const dx = (x - cx - faceShift) / 3.7;
+        const dy = (y - cy - 1.3) / 3.4;
         if (dx * dx + dy * dy <= 1) buf.blend(x, y, rgba(s.skinDark, 110));
       }
     // Fringe sitting on the brow, plus sideburns.
     buf.hline(cx - 3, cx + 3, Math.round(cy - 1), s.hair);
-    buf.set(Math.round(cx - 3), Math.round(cy), s.hair);
-    buf.set(Math.round(cx + 3), Math.round(cy), s.hair);
+    buf.set(Math.round(cx - 4), Math.round(cy), s.hair);
+    buf.set(Math.round(cx + 4), Math.round(cy), s.hair);
     buf.set(Math.round(cx - 2), Math.round(cy - 1), mix(s.hair, P.hairLight, 0.5));
     // Eyes
     if (dir === 0) {
@@ -335,8 +326,8 @@ export function drawHumanoid(s: Skin, dir: Dir, p: Pose, flap = 0): PixelBuffer 
   return buf;
 }
 
-function finish(buf: PixelBuffer, ink: RGBA): PixelBuffer {
-  buf.outline(ink);
+function finish(buf: PixelBuffer): PixelBuffer {
+  buf.selOutline();
   buf.rimLight(P.white, 0.2);
   return buf;
 }
@@ -425,7 +416,7 @@ function bakeDeath(s: Skin, dir: Dir): PixelBuffer[] {
         twist: -2 * ease,
       }),
     );
-    finish(body, s.ink);
+    finish(body);
 
     const f = new PixelBuffer(FRAME_W, FRAME_H);
     // Blood pool spreads underneath as the body settles.
@@ -454,7 +445,7 @@ function bakeDeath(s: Skin, dir: Dir): PixelBuffer[] {
 function bake(s: Skin, dir: Dir, poses: Pose[], flapScale = 0): Sheet {
   const frames = poses.map((p, i) => {
     const flap = flapScale === 0 ? 0 : Math.sin((i / poses.length) * Math.PI * 2) * flapScale;
-    return finish(drawHumanoid(s, dir, p, flap), s.ink);
+    return finish(drawHumanoid(s, dir, p, flap));
   });
   return bakeSheet(frames, ANCHOR_X, ANCHOR_Y);
 }
@@ -539,7 +530,7 @@ export function bakeGun(): Sheet {
       b.set(13, 2, P.fireHot);
       b.set(14, 3, P.fire);
     }
-    b.outline(P.ink);
+    b.selOutline();
     frames.push(b);
   }
   // Anchor at the grip so it pivots in the hand.

@@ -27,6 +27,26 @@ npm run build    # 类型检查 + 打包到 dist/
 | `G` / `C` | 网格 / 碰撞体调试显示 |
 | `I` / `H` | 物件名称提示 / 帮助面板 |
 
+## 美术风格规则
+
+素材是代码生成的，但遵守的是手绘像素画的规矩。这几条写在 `src/art/palette.ts` 和 `src/art/pixel.ts` 里，是整套素材能"看起来像一个人画的"的原因：
+
+**1. 色相偏移（hue shifting）。** 阴影不是"同一个颜色调暗"——现实里阴影由天光照亮，所以要往蓝紫偏；高光由暖色主光照亮，要往黄偏。每条色阶（ramp）沿明度轴旋转色相，暗端朝 250°、亮端朝 48° 走最短弧。这是暗部不发闷、发灰的唯一原因。5 档一条，index 0 是阴影/描边色，2 是本色，4 是高光。
+
+**2. 封闭调色板。** 连续插值会凭空造出上百个几乎相同的颜色，在 1px 尺度上只会糊成一片而不是细节。`bakeSheet()` 里对每一帧调用 `quantize()`，把像素吸附回调色板——不管绘制过程怎么混色，最终上屏的精灵只用得到调色板里的颜色。`shade(c, t)` 也被改成**沿该颜色自己的色阶走档**，而不是往黑白衰减，所以所有旧的调用点自动变得色阶正确。
+
+**3. 选择性描边（sel-out）。** 统一的纯黑描边会把精灵压平，整套素材看起来像盖章盖出来的。`selOutline()` 让描边**取相邻像素的色相**再沿色阶压暗，并且朝向主光（左上）的边用更浅的描边、背光（右下）的边用更深的——描边本身就在表达形体。
+
+**4. 纹理是"簇"，不是噪点。** 逐像素随机 = 电视雪花。地面用 2–3px 的重复图案（`GRASS_MOTIFS` 等）撒在**抖动过的格点**上，格子永远大于图案，所以簇之间不会连成一片；密度由低频噪声调制，于是有茂密处也有裸露处——留白和细节一样重要。
+
+**5. 平面 + 过渡处抖动。** 全屏 Bayer 抖动会变成一层纱窗纹理。`rampBand()` 让色阶保持成**平坦色块**，只在两档交界的窄带里抖动。
+
+**6. 单一光源方向，不做 pillow shading。** 叶簇、灌木的亮部只画在左上半边，绝不沿轮廓一圈内缩——后者会让物体看起来像个模糊的枕头。
+
+**7. 地面明度压在道具之下。** 广场石板只用色阶的下半段：地面是画面上最大的一块面，如果和道具一样亮，站在上面的东西就没有剪影了。俯视图里规则的错缝砖块会读成"墙"，所以石板的行高、列宽、切角都是随机的。
+
+参考：[SLYNYRD Pixelblog 1 – Color Palettes](https://www.slynyrd.com/blog/2018/1/10/pixelblog-1-color-palettes)、[Pixelblog 20 – Top Down Tiles](https://www.slynyrd.com/blog/2019/8/27/pixelblog-20-top-down-tiles)、[Pixelblog 21 – Top Down Objects](https://www.slynyrd.com/blog/2019/9/18/pixelblog-21-top-down-objects)、[Derek Yu – Pixel Art: Common Mistakes](https://www.derekyu.com/makegames/pixelart2.html)、[Pixel Parmesan – Anti-Aliasing Fundamentals](https://pixelparmesan.com/blog/anti-aliasing-fundamentals-for-pixel-artists)。
+
 ## 测试内容
 
 ### 1. 像素人物
@@ -81,8 +101,8 @@ npm run build    # 类型检查 + 打包到 dist/
 ```
 src/
   art/            # 全部美术资源的程序化生成（不含任何图片文件）
-    pixel.ts      #   PixelBuffer：逐像素画布 + 胶囊/椭圆/描边/变换 blit
-    palette.ts    #   全局统一调色板
+    pixel.ts      #   PixelBuffer：绘制图元 + 调色板量化 + 选择性描边 + 色阶抖动
+    palette.ts    #   色相偏移色阶（全工程唯一的颜色来源）
     sheet.ts      #   精灵表烘焙 + 动画 Clip
     character.ts  #   人形骨架与 5 套动画
     creatures.ts  #   史莱姆

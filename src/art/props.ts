@@ -55,7 +55,7 @@ export function table(): PixelBuffer {
   b.set(11, 9, P.steel);
   b.fillRect(19, 9, 7, 3, P.blood);
   b.hline(19, 25, 9, P.gold);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -70,7 +70,7 @@ export function chair(facing: 1 | -1): PixelBuffer {
   b.fillRect(bx - (facing === 1 ? 0 : 0), 2, 2, 1, P.woodLight);
   b.fillRect(3, 3, 10, 2, P.wood);
   b.fillRect(3, 6, 10, 2, P.woodDark);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -100,7 +100,7 @@ export function barrel(seed: number): PixelBuffer {
   b.ellipse(10, 4.5, 7.2, 2.6, P.woodDark);
   b.ellipse(10, 4, 6.4, 2.1, P.woodPale);
   for (let i = 0; i < 6; i++) b.set(rng.int(5, 15), 4, P.woodDark);
-  b.outline(P.ink);
+  b.selOutline();
   b.rimLight(P.woodPale, 0.3);
   return b;
 }
@@ -116,7 +116,7 @@ export function crate(seed: number): PixelBuffer {
   b.line(3, 4, 18, 18, P.woodLight);
   for (let i = 0; i < 5; i++) b.set(rng.int(3, 16), rng.int(5, 18), shade(P.woodDark, -0.3));
   b.fillRect(2, 4, 16, 1, P.woodPale);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -143,7 +143,7 @@ export function bookshelf(): PixelBuffer {
   }
   b.strokeRect(1, 2, 28, 36, P.ink);
   b.fillRect(1, 2, 28, 2, P.wood);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -183,7 +183,7 @@ export function bed(): PixelBuffer {
   for (const y of [21, 27]) b.hline(5, 20, y, P.coatDark);
   b.vline(4, 13, 33, P.coatLight);
   b.vline(21, 13, 33, P.coatDark);
-  b.outline(P.ink);
+  b.selOutline();
   b.rimLight(P.white, 0.2);
   return b;
 }
@@ -195,7 +195,7 @@ export function sign(): PixelBuffer {
   planks(b, 2, 4, 18, 10, 12);
   b.strokeRect(2, 4, 18, 10, P.woodDark);
   for (let i = 0; i < 3; i++) b.hline(5, 16 - i * 3, 7 + i * 2, shade(P.woodDark, -0.4));
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -233,7 +233,7 @@ export function wallSegment(seed: number, ruined = false): PixelBuffer {
     }
     for (let i = 0; i < 6; i++) b.set(rng.int(0, 15), rng.int(bodyTop, 27), P.moss);
   }
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -255,7 +255,7 @@ export function pillar(): PixelBuffer {
   b.fillRect(2, 4, 14, 5, P.stone);
   b.fillRect(1, 2, 16, 3, P.stoneLight);
   b.hline(1, 16, 2, mix(P.stoneLight, P.white, 0.3));
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -285,7 +285,7 @@ export function archDoor(): PixelBuffer {
   b.fillRect(12, 24, 16, 2, P.steelDark);
   b.fillRect(12, 36, 16, 2, P.steelDark);
   b.ellipse(24, 31, 1.6, 1.6, P.gold);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -300,7 +300,7 @@ export function fence(): PixelBuffer {
   b.fillRect(0, 13, 16, 2, P.wood);
   b.hline(0, 15, 7, P.woodLight);
   b.hline(0, 15, 13, P.woodLight);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -321,7 +321,7 @@ export function bridgeRail(): PixelBuffer {
   b.fillRect(2, 2, 3, 10, P.wood);
   b.fillRect(11, 2, 3, 10, P.wood);
   b.fillRect(0, 2, 16, 2, P.woodLight);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -348,7 +348,7 @@ export function well(): PixelBuffer {
   }
   b.fillRect(14, 15, 6, 5, P.steelDark);
   b.vline(17, 16, 27, P.steel);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -389,7 +389,7 @@ export function torchClip(): Clip {
     b.vline(8, 14, 27, P.woodDark);
     b.fillRect(4, 12, 6, 3, P.steelDark);
     b.fillRect(4, 12, 6, 1, P.steel);
-    b.outline(P.ink);
+    b.selOutline();
     flameShape(b, 7, 12, 10 + (i % 2), 2.4, t, 0);
     frames.push(b);
   }
@@ -413,7 +413,7 @@ export function campfireClip(): Clip {
     for (const a of logAngles) {
       b.capsule(15 - Math.cos(a) * 7, 24 - Math.sin(a) * 3, 15 + Math.cos(a) * 7, 24 + Math.sin(a) * 3, 1.6, P.woodDark);
     }
-    b.outline(P.ink);
+    b.selOutline();
     // Embers
     for (let e = 0; e < 6; e++) b.blend(rng.int(11, 19), rng.int(22, 25), rgba(P.fire, 200));
     flameShape(b, 15, 23, 13 + (i % 3), 3.4, t, 0);
@@ -436,7 +436,7 @@ export function braziersClip(): Clip {
     b.ellipse(11, 20, 8, 4, P.steelDark);
     b.ellipse(11, 19, 7, 3.2, P.steel);
     b.ellipse(11, 19, 5.4, 2.4, shade(P.steelDark, -0.4));
-    b.outline(P.ink);
+    b.selOutline();
     b.ellipse(11, 19, 5, 2, rgba(P.fireDeep, 220));
     flameShape(b, 11, 19, 12 + (i % 3), 3, t, 0.9);
     flameShape(b, 8.5, 19, 7 + ((i + 1) % 2), 1.8, t + 0.4, 2.2);
@@ -456,7 +456,7 @@ export function cauldronClip(): Clip {
     b.ellipse(13, 15, 9, 7, shade(P.steelDark, 0.12));
     b.ellipse(13, 10, 9, 3.4, P.ink);
     b.ellipse(13, 10, 8, 2.8, P.magicDeep);
-    b.outline(P.ink);
+    b.selOutline();
     // Bubbles rise on a loop
     for (let k = 0; k < 3; k++) {
       const ph = (i / 6 + k / 3) % 1;
@@ -499,7 +499,7 @@ export function chestClips(): { closed: Sheet; open: Clip } {
       }
     }
     b.fillRect(3, ly + 6, 18, 2, P.steelDark);
-    b.outline(P.ink);
+    b.selOutline();
     return b;
   };
   const closed = build(0, 0);
@@ -533,7 +533,7 @@ export function bannerClip(): Clip {
     const wob0 = Math.sin(t + 10 * 0.35) * 1.6 * (8 / 30);
     b.ellipse(10 + wob0, 12, 3.2, 3.2, P.gold);
     b.ellipse(10 + wob0, 12, 1.6, 1.6, P.blood);
-    b.outline(P.ink);
+    b.selOutline();
     frames.push(b);
   }
   return anim(frames, 3, 38, 8);
@@ -568,7 +568,7 @@ export function potion(color: RGBA): Clip {
     // Sloshing surface
     const s = Math.round(Math.sin(t * Math.PI * 2) * 0.8);
     b.hline(4, 10, 8 + s, shade(color, 0.35));
-    b.outline(P.ink);
+    b.selOutline();
     return b;
   }, 7, 16);
 }
@@ -585,7 +585,7 @@ export function coinClip(): Clip {
     b.ellipse(6, 6 - off, Math.max(0.4, w - 1), 3, P.gold);
     if (w > 2.4) b.ellipse(6, 6 - off, w - 2.2, 1.6, P.goldDark);
     b.set(6 - Math.round(w * 0.4), 4 - off, P.white);
-    b.outline(P.ink);
+    b.selOutline();
     frames.push(b);
   }
   return anim(frames, 6, 12, 12);
@@ -600,7 +600,7 @@ export function keyItem(): Clip {
     b.fillRect(10, 6, 2, 2, P.gold);
     b.fillRect(12, 6, 1, 3, P.gold);
     b.set(3, 3, P.fireHot);
-    b.outline(P.ink);
+    b.selOutline();
     return b;
   }, 7, 12);
 }
@@ -624,7 +624,7 @@ export function gemClip(color: RGBA): Clip {
     }
     b.set(6, cy - 2, rgba(P.white, 220));
     b.set(5, cy - 1, rgba(P.white, 150));
-    b.outline(P.ink);
+    b.selOutline();
     // Sparkle
     if (i % 4 === 0) {
       b.set(11, cy - 4, P.white);
@@ -645,7 +645,7 @@ export function ammoBox(): PixelBuffer {
   b.fillRect(5, 2, 6, 2, P.steelDark);
   b.fillRect(6, 6, 4, 4, P.gold);
   b.set(7, 7, P.goldDark);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
@@ -659,7 +659,7 @@ export function heartItem(): Clip {
       for (let x = -half; x <= half; x++) b.set(Math.round(7 + x), y, P.blood);
     }
     b.ellipse(4.6, 4.2, 1.1, 1, rgba(P.white, 200));
-    b.outline(P.ink);
+    b.selOutline();
     return b;
   }, 7, 12, 6);
 }
@@ -672,7 +672,7 @@ export function scroll(): PixelBuffer {
   b.fillRect(1, 2, 3, 8, P.woodDark);
   b.fillRect(12, 2, 3, 8, P.woodDark);
   for (let i = 0; i < 3; i++) b.hline(5, 11, 4 + i * 2, P.sandDark);
-  b.outline(P.ink);
+  b.selOutline();
   return b;
 }
 
