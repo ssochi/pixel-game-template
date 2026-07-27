@@ -5,7 +5,7 @@
  * which is the classic pixel-art wind trick: it keeps every pixel on the grid
  * (no rotation blur) while reading as a soft sway.
  */
-import { PixelBuffer, mix, rgba, shade, type RGBA } from './pixel';
+import { PixelBuffer, mix, parseArt, rgba, shade, type RGBA } from './pixel';
 import { P, R } from './palette';
 import { bakeSheet, clip, type Clip, type Sheet } from './sheet';
 import { RNG, fbm } from '../engine/rng';
@@ -76,34 +76,57 @@ export function bush(seed: number): PixelBuffer {
   b.ellipse(cx - 1.5, cy - 2.5, 7, 4.4, R.leaf[2]);
   // Directional light: leaf clumps only on the upper-left half. Shading that
   // followed the outline all the way round would be pillow shading.
-  for (let i = 0; i < 16; i++) {
-    const a = rng.range(Math.PI * 0.75, Math.PI * 1.95);
-    const r = rng.range(0.25, 1);
+  // A handful of well-separated clumps, all one value. Two values scattered at
+  // random turned the top of the bush into a mottled hole.
+  for (let i = 0; i < 7; i++) {
+    const a = Math.PI * 0.85 + (i / 6) * Math.PI * 1.05;
+    const r = rng.range(0.45, 0.9);
     const x = cx - 1 + Math.cos(a) * 7 * r;
-    const y = cy - 2 + Math.sin(a) * 4.5 * r;
-    b.ellipse(x, y, rng.range(1.2, 2.2), rng.range(1, 1.8), r > 0.7 ? R.leaf[3] : R.leaf[4]);
+    const y = cy - 2.5 + Math.sin(a) * 4 * r;
+    b.ellipse(x, y, 2, 1.4, R.leaf[3]);
   }
-  // Berries sit in the shaded half for contrast.
-  for (let i = 0; i < 4; i++) {
-    b.set(Math.round(rng.range(9, 21)), Math.round(rng.range(13, 18)), P.flowerA);
+  // Berries: single pixels, in the shaded half so they read as accents.
+  for (const [bx, by] of [
+    [11, 16],
+    [17, 14],
+    [14, 18],
+  ] as [number, number][]) {
+    b.set(bx, by, R.red[3]);
   }
   b.groundShadow(cx, 21, 9, 2.5, 110);
   b.selOutline();
   return b;
 }
 
+/**
+ * Below roughly 12px, generated shapes stop reading as objects — a flower head
+ * built from ellipses is just a coloured smudge. These are drawn pixel by
+ * pixel; the outline is added afterwards by `selOutline`.
+ */
+const FLOWER_ART = [
+  '..P.P..',
+  '.PLPPP.',
+  'PPPYPPP',
+  '.PPPPP.',
+  '..P.P..',
+  '...S...',
+  '..LS...',
+  '...SL..',
+  '...S...',
+  '...S...',
+];
+
 export function flower(seed: number, color: RGBA): PixelBuffer {
   const rng = new RNG(seed);
   const b = new PixelBuffer(12, 14);
-  const x = 6;
-  const topY = rng.int(3, 5);
-  for (let y = 12; y > topY; y--) b.set(x + (y < 8 ? 0 : 0), y, P.leafDark);
-  b.set(x - 1, 9, P.leaf);
-  b.set(x - 2, 8, P.leaf);
-  b.set(x + 1, 10, P.leaf);
-  b.ellipse(x, topY, 2.2, 2.2, color);
-  b.ellipse(x, topY, 1, 1, P.flowerB);
-  b.set(x - 2, topY - 1, shade(color, 0.25));
+  const art = parseArt(FLOWER_ART, {
+    P: color,
+    L: shade(color, 0.35),
+    Y: P.flowerB,
+    S: R.leaf[1],
+  });
+  // Vary the stem height per instance so a patch doesn't look stamped.
+  b.blit(art, 2, 2 + rng.int(0, 2));
   b.selOutline();
   return b;
 }
@@ -142,18 +165,29 @@ export function lilyPad(seed: number): PixelBuffer {
   return b;
 }
 
-export function mushroom(seed: number, glow: boolean): PixelBuffer {
-  const rng = new RNG(seed);
+const MUSHROOM_ART = [
+  '...MMMMM...',
+  '..MoMMMoM..',
+  '.MMMMoMMMM.',
+  '.MMMMMMMMD.',
+  '.DDDDDDDDD.',
+  '..DSSSSSD..',
+  '....SSS....',
+  '....SsS....',
+  '....SSS....',
+  '...SSSSS...',
+];
+
+export function mushroom(_seed: number, glow: boolean): PixelBuffer {
   const b = new PixelBuffer(14, 14);
-  const cx = 7;
-  const capColor = glow ? P.magicDeep : P.flowerA;
-  b.fillRect(cx - 1, 8, 3, 5, P.sand);
-  b.vline(cx - 1, 8, 12, P.sandDark);
-  b.ellipse(cx, 7, 5, 3.4, capColor);
-  b.ellipse(cx, 6.4, 4.6, 2.8, glow ? P.magic : shade(capColor, 0.2));
-  for (let i = 0; i < 4; i++) {
-    b.set(Math.round(rng.range(3, 11)), Math.round(rng.range(5, 8)), glow ? P.white : P.sand);
-  }
+  const art = parseArt(MUSHROOM_ART, {
+    M: glow ? R.magic[2] : R.red[2],
+    o: glow ? R.magic[4] : P.white,
+    D: glow ? R.magic[1] : R.red[1],
+    S: R.paper[3],
+    s: R.paper[2],
+  });
+  b.blit(art, 1, 3);
   b.selOutline();
   return b;
 }
@@ -266,55 +300,81 @@ export function tree(seed: number, kind: 'oak' | 'pine' | 'dead' = 'oak'): Pixel
 // Rocks & crystals
 // ---------------------------------------------------------------------------
 
+/**
+ * Rocks are built from **planes, not blobs**.
+ *
+ * The previous version stacked translucent ellipses and speckled noise over
+ * them, which produced a flat grey puddle: no silhouette, no form. A rock reads
+ * as a rock when it has a hard-edged silhouette that is wider at the base than
+ * the top, and two or three *flat* facets divided by straight breaks — a lit
+ * top plane, a mid front plane and a dark under-plane. The row-width table gives
+ * the silhouette; a diagonal split gives the facets.
+ */
 export function rock(seed: number, size: 'small' | 'mid' | 'big', mossy = false): PixelBuffer {
   const rng = new RNG(seed);
-  const dim = size === 'small' ? 14 : size === 'mid' ? 24 : 38;
-  const b = new PixelBuffer(dim, Math.round(dim * 0.85));
-  const cx = dim / 2;
-  const cy = b.h * 0.62;
-  const rx = dim * 0.42;
-  const ry = b.h * 0.34;
+  const scale = size === 'small' ? 1 : size === 'mid' ? 1.7 : 2.7;
+  // Base silhouette as fractions of the full width, top row first.
+  const profile = [0.34, 0.6, 0.82, 0.95, 1, 1, 0.92, 0.68];
+  const w = Math.round(12 * scale);
+  const rowH = Math.max(1, Math.round(scale));
+  const h = profile.length * rowH + 2;
+  const b = new PixelBuffer(w + 4, h + 2);
+  const cx = (w + 4) / 2;
 
-  b.groundShadow(cx, b.h - 2, rx, ry * 0.5, 110);
+  b.groundShadow(cx, h, w * 0.44, Math.max(1.4, scale), 110);
 
-  // Irregular silhouette from a few overlapping facets.
-  const facets = rng.int(3, 5);
-  for (let i = 0; i < facets; i++) {
-    const a = (i / facets) * Math.PI * 2 + rng.range(-0.4, 0.4);
-    b.ellipse(cx + Math.cos(a) * rx * 0.35, cy + Math.sin(a) * ry * 0.35, rx * rng.range(0.6, 0.85), ry * rng.range(0.7, 1), P.stone);
+  // Per-row horizontal jitter so the rock is asymmetric but still hard-edged.
+  const lean = profile.map(() => rng.int(-1, 1));
+  const spans: [number, number][] = [];
+  for (let i = 0; i < profile.length; i++) {
+    const half = Math.max(1, Math.round((profile[i] * w) / 2));
+    spans.push([Math.round(cx - half + lean[i]), Math.round(cx + half + lean[i])]);
   }
-  b.ellipse(cx, cy, rx * 0.9, ry * 0.9, P.stone);
-  // Top-left lit facet, bottom-right shadow.
-  b.ellipse(cx - rx * 0.25, cy - ry * 0.35, rx * 0.5, ry * 0.45, P.stoneLight);
-  for (let y = 0; y < b.h; y++)
-    for (let x = 0; x < b.w; x++) {
-      if (b.alphaAt(x, y) < 200) continue;
-      const dx = (x - cx) / rx;
-      const dy = (y - cy) / ry;
-      if (dx + dy > 0.75) b.blend(x, y, rgba(P.stoneDark, 190));
-      if (dy > 0.75) b.blend(x, y, rgba(P.stoneDeep, 140));
-    }
-  // Cracks
-  const cracks = size === 'small' ? 1 : 2;
-  for (let i = 0; i < cracks; i++) {
-    let x = cx + rng.range(-rx * 0.5, rx * 0.5);
-    let y = cy - ry * 0.4;
-    for (let j = 0; j < dim * 0.4; j++) {
-      if (b.alphaAt(Math.round(x), Math.round(y)) > 200) b.set(Math.round(x), Math.round(y), P.stoneDeep);
-      x += rng.range(-0.9, 0.9);
-      y += rng.range(0.2, 1);
+
+  // The facet break runs from the upper-right down to the lower-left.
+  const breakAt = (row: number): number => cx - w * 0.1 + row * rowH * 0.9;
+
+  for (let i = 0; i < spans.length; i++) {
+    const [x0, x1] = spans[i];
+    for (let r = 0; r < rowH; r++) {
+      const y = 1 + i * rowH + r;
+      for (let x = x0; x <= x1; x++) {
+        const topPlane = i === 0 || (i === 1 && x < breakAt(i));
+        const lit = x < breakAt(i);
+        let c = topPlane ? R.stone[3] : lit ? R.stone[2] : R.stone[1];
+        // Under-plane: the bottom two rows always fall away into shadow.
+        if (i >= spans.length - 2) c = lit ? R.stone[1] : R.stone[0];
+        if (x === x1 && i > 1) c = R.stone[0];
+        b.set(x, y, c);
+      }
     }
   }
+
+  // One straight crack, following the facet break rather than wandering.
+  if (size !== 'small') {
+    const startRow = 1 + rng.int(0, 1);
+    let x = Math.round(breakAt(startRow)) + rng.int(0, 2);
+    for (let i = startRow; i < spans.length - 1; i++) {
+      for (let r = 0; r < rowH; r++) {
+        const y = 1 + i * rowH + r;
+        if (b.alphaAt(x, y) > 200) b.set(x, y, R.stone[0]);
+      }
+      x += rng.int(0, 1);
+    }
+  }
+
   if (mossy) {
-    for (let i = 0; i < dim * 2; i++) {
-      const x = Math.round(rng.range(0, b.w));
-      const y = Math.round(rng.range(cy - ry, cy + ry));
-      if (b.alphaAt(x, y) < 200) continue;
-      if (fbm(x * 0.3, y * 0.3, 2) > 0.55) b.blend(x, y, rgba(P.moss, 220));
+    // Moss sits on the top plane only, in clumps, never as scattered pixels.
+    for (let i = 0; i < 3; i++) {
+      const [x0, x1] = spans[rng.int(0, 2)];
+      const mx = rng.int(x0 + 1, x1 - 2);
+      const my = 1 + rng.int(0, 2) * rowH;
+      b.fillRect(mx, my, 2, 1, R.leaf[1]);
+      b.set(mx, my - 1, R.leaf[2]);
     }
   }
+
   b.selOutline();
-  b.rimLight(P.stoneLight, 0.4);
   return b;
 }
 
@@ -428,10 +488,10 @@ export function bakeNature(): NatureAssets {
     pine: swayClip(tree(203, 'pine'), 26, 62, 1.2, 3, 6),
     deadTree: swayClip(tree(307, 'dead'), 26, 62, 1, 3, 4),
     rocks: [
-      still(rock(401, 'small'), 7, 11),
-      still(rock(402, 'mid', true), 12, 19),
-      still(rock(403, 'big'), 19, 31),
-      still(rock(404, 'mid'), 12, 19),
+      still(rock(401, 'small'), 8, 10),
+      still(rock(402, 'mid', true), 12, 18),
+      still(rock(403, 'big'), 18, 26),
+      still(rock(404, 'mid'), 12, 18),
     ],
     crystal: crystalClip(501),
     stump: still(stump(601), 10, 15),

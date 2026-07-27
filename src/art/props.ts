@@ -4,8 +4,8 @@
  * Anything with a flame, a shimmer or a lid gets a Clip; the rest bake to a
  * single-frame Sheet so the scene can treat every prop identically.
  */
-import { PixelBuffer, mix, rgba, shade, type RGBA } from './pixel';
-import { P } from './palette';
+import { PixelBuffer, mix, parseArt, rgba, shade, type RGBA } from './pixel';
+import { P, R } from './palette';
 import { bakeSheet, clip, type Clip, type Sheet } from './sheet';
 import { RNG, fbm } from '../engine/rng';
 
@@ -557,121 +557,219 @@ function bobbing(base: (t: number) => PixelBuffer, ax: number, ay: number, fps =
   return anim(frames, ax, ay, fps);
 }
 
+/**
+ * Pickups are small enough that generated shapes can't compete with drawn
+ * ones: at 10px across an ellipse is just a blob, and every pixel has to be
+ * placed on purpose. These are authored as pixel maps and stamped with
+ * `parseArt`. The outline is deliberately left out of the maps — `selOutline()`
+ * adds it afterwards — so the art only describes the form.
+ */
+
+const POTION_ART = [
+  '....KKK....',
+  '....kkk....',
+  '...GGGGG...',
+  '....ggg....',
+  '....ggg....',
+  '...ggggg...',
+  '..ghggggg..',
+  '.ghggggggg.',
+  '.lhlllllll.',
+  '.mmmmmmmmm.',
+  '.mmmmmmmmm.',
+  '.mmmmmmmmd.',
+  '..ddddddd..',
+  '...ddddd...',
+];
+
 export function potion(color: RGBA): Clip {
+  const map: Record<string, RGBA> = {
+    K: R.wood[1],
+    k: R.wood[3],
+    G: R.metal[4],
+    g: R.metal[3],
+    h: P.white,
+    l: shade(color, 0.35),
+    m: color,
+    d: shade(color, -0.35),
+  };
+  const art = parseArt(POTION_ART, map);
   return bobbing((t) => {
     const b = new PixelBuffer(14, 18);
-    b.fillRect(6, 2, 2, 3, P.steelDark);
-    b.fillRect(5, 1, 4, 2, P.wood);
-    b.ellipse(7, 10, 4, 4.6, shade(color, -0.35));
-    b.ellipse(7, 10.5, 3.2, 3.8, color);
-    b.ellipse(5.6, 9, 1.2, 1.6, rgba(P.white, 180));
-    // Sloshing surface
-    const s = Math.round(Math.sin(t * Math.PI * 2) * 0.8);
-    b.hline(4, 10, 8 + s, shade(color, 0.35));
+    b.blit(art, 2, 2);
+    // The liquid surface sloshes by one pixel from side to side.
+    if (Math.sin(t * Math.PI * 2) > 0) {
+      b.hline(3, 6, 10, map.m);
+      b.hline(8, 11, 9, map.l);
+    }
     b.selOutline();
     return b;
   }, 7, 16);
 }
 
+/**
+ * Spinning coin. The disc comes from an explicit table of row widths rather
+ * than a rasterised ellipse: a hand-picked run-length sequence is the whole
+ * difference between a coin and an orange smudge at this size.
+ */
+const COIN_ROWS = [4, 6, 8, 8, 8, 8, 6, 4];
+
 export function coinClip(): Clip {
   const frames: PixelBuffer[] = [];
+  const squash = [1, 0.75, 0.4, 0.14, 0.14, 0.4, 0.75, 1];
   for (let i = 0; i < 8; i++) {
     const b = new PixelBuffer(12, 14);
-    // Width oscillates -> spinning disc
-    const w = Math.abs(Math.cos((i / 8) * Math.PI * 2)) * 3.6 + 0.6;
-    const off = Math.round(Math.sin((i / 8) * Math.PI * 2) * 1.2);
-    b.ellipse(6, 10, 3.4, 1.4, rgba(P.shadow, 90));
-    b.ellipse(6, 6 - off, w, 4, P.goldDark);
-    b.ellipse(6, 6 - off, Math.max(0.4, w - 1), 3, P.gold);
-    if (w > 2.4) b.ellipse(6, 6 - off, w - 2.2, 1.6, P.goldDark);
-    b.set(6 - Math.round(w * 0.4), 4 - off, P.white);
+    const s = squash[i];
+    const edgeOn = s < 0.3;
+    b.ellipse(6, 11, 3, 1, rgba(P.shadow, 80));
+    for (let row = 0; row < COIN_ROWS.length; row++) {
+      const w = Math.max(2, Math.round((COIN_ROWS[row] * s) / 2) * 2);
+      const y = 2 + row;
+      const x0 = 6 - w / 2;
+      for (let x = x0; x < x0 + w; x++) {
+        const rim = x === x0 || x === x0 + w - 1 || row === 0 || row === COIN_ROWS.length - 1;
+        // Face lit from the upper left, dark rim all the way round.
+        let c = rim ? R.gold[1] : x - x0 < w / 2 && row < 4 ? R.gold[4] : R.gold[3];
+        if (edgeOn) c = x === x0 ? R.gold[3] : R.gold[1];
+        b.set(x, y, c);
+      }
+    }
+    if (!edgeOn && s > 0.6) {
+      // Embossed mark on the face.
+      b.fillRect(5, 5, 2, 3, R.gold[1]);
+      b.set(5, 5, R.gold[2]);
+    }
     b.selOutline();
     frames.push(b);
   }
   return anim(frames, 6, 12, 12);
 }
 
+const KEY_ART = [
+  '.LLG........',
+  'LG.GG.......',
+  'LG.GG.......',
+  '.LLLLLLLLLL.',
+  '.GGGGGGGGGGG',
+  '........G.G.',
+];
+
 export function keyItem(): Clip {
+  const art = parseArt(KEY_ART, { L: R.gold[4], G: R.gold[3] });
   return bobbing(() => {
     const b = new PixelBuffer(14, 14);
-    b.ellipse(4, 5, 3, 3, P.gold);
-    b.ellipse(4, 5, 1.4, 1.4, [0, 0, 0, 0]);
-    b.fillRect(6, 4, 7, 2, P.gold);
-    b.fillRect(10, 6, 2, 2, P.gold);
-    b.fillRect(12, 6, 1, 3, P.gold);
-    b.set(3, 3, P.fireHot);
+    b.blit(art, 1, 4);
     b.selOutline();
     return b;
   }, 7, 12);
 }
 
+const GEM_ART = [
+  '...LLL...',
+  '..LHMMM..',
+  '.LLMMMMD.',
+  'LLMMMMMDD',
+  'LLMMMMMDD',
+  '.LMMMMMD.',
+  '..LMMMD..',
+  '...LMD...',
+  '....D....',
+];
+
 export function gemClip(color: RGBA): Clip {
+  const art = parseArt(GEM_ART, {
+    L: shade(color, 0.35),
+    M: color,
+    D: shade(color, -0.35),
+    H: P.white,
+  });
   const frames: PixelBuffer[] = [];
   for (let i = 0; i < 8; i++) {
     const t = i / 8;
     const b = new PixelBuffer(14, 16);
     const off = Math.round(Math.sin(t * Math.PI * 2) * 1.4);
-    b.ellipse(7, 13, 3.6, 1.4, rgba(P.shadow, 80));
-    const cy = 7 - off;
-    b.line(7, cy - 4, 3, cy, shade(color, 0.35));
-    b.line(7, cy - 4, 11, cy, shade(color, -0.2));
-    for (let y = -4; y <= 5; y++) {
-      const half = y < 0 ? (y + 4) : 4 - Math.round(((y) / 5) * 4);
-      for (let x = -half; x <= half; x++) {
-        const c = x < 0 ? color : shade(color, -0.28);
-        b.set(7 + x, cy + y, c);
-      }
-    }
-    b.set(6, cy - 2, rgba(P.white, 220));
-    b.set(5, cy - 1, rgba(P.white, 150));
+    b.ellipse(7, 13, 3, 1, rgba(P.shadow, 80));
+    b.blit(art, 3, 3 - off);
     b.selOutline();
-    // Sparkle
-    if (i % 4 === 0) {
-      b.set(11, cy - 4, P.white);
-      b.set(12, cy - 4, rgba(P.white, 120));
-      b.set(11, cy - 5, rgba(P.white, 120));
+    // Four-point sparkle, on for two frames out of eight.
+    if (i === 0 || i === 1) {
+      const sx = 11;
+      const sy = 4 - off;
+      b.set(sx, sy, P.white);
+      b.set(sx - 1, sy, rgba(P.white, 140));
+      b.set(sx + 1, sy, rgba(P.white, 140));
+      b.set(sx, sy - 1, rgba(P.white, 140));
+      b.set(sx, sy + 1, rgba(P.white, 140));
     }
     frames.push(b);
   }
   return anim(frames, 7, 14, 8);
 }
 
+const AMMO_ART = [
+  '...LLLLL....',
+  '...M...M....',
+  'LLLLLLLLLLLL',
+  'MMMMMMMMMMMM',
+  'DDDDDDDDDDDD',
+  'MMMMMbbMMMMM',
+  'MMMMMbbMMMMM',
+  'MMMMMMMMMMMM',
+  'DDDDDDDDDDDD',
+];
+
 export function ammoBox(): PixelBuffer {
   const b = new PixelBuffer(16, 14);
-  b.groundShadow(8, 12, 6, 1.8, 100);
-  b.fillRect(2, 4, 12, 8, P.moss);
-  b.fillRect(2, 4, 12, 2, shade(P.moss, 0.25));
-  b.fillRect(2, 8, 12, 1, shade(P.moss, -0.3));
-  b.fillRect(5, 2, 6, 2, P.steelDark);
-  b.fillRect(6, 6, 4, 4, P.gold);
-  b.set(7, 7, P.goldDark);
+  b.groundShadow(8, 12, 6, 1.4, 100);
+  b.blit(parseArt(AMMO_ART, { L: R.leaf[3], M: R.leaf[2], D: R.leaf[1], b: R.gold[3] }), 2, 2);
   b.selOutline();
   return b;
 }
 
+const HEART_ART = [
+  '.MM.MM.',
+  'MHMMMMD',
+  'MMMMMMD',
+  'MMMMMDD',
+  '.MMMMD.',
+  '..MMD..',
+  '...D...',
+];
+
 export function heartItem(): Clip {
+  const art = parseArt(HEART_ART, { M: R.red[2], H: R.red[4], D: R.red[1] });
   return bobbing(() => {
     const b = new PixelBuffer(14, 14);
-    b.ellipse(5, 5, 2.6, 2.6, P.blood);
-    b.ellipse(9, 5, 2.6, 2.6, P.blood);
-    for (let y = 5; y < 11; y++) {
-      const half = 4 - (y - 5) * 0.8;
-      for (let x = -half; x <= half; x++) b.set(Math.round(7 + x), y, P.blood);
-    }
-    b.ellipse(4.6, 4.2, 1.1, 1, rgba(P.white, 200));
+    b.blit(art, 3, 3);
     b.selOutline();
     return b;
   }, 7, 12, 6);
 }
 
+const SCROLL_ART = [
+  '..pppppppp..',
+  'WWPPPPPPPPWW',
+  'WWPttttttPWW',
+  'WWPPPPPPPPWW',
+  'WWPttttttPWW',
+  'WWPPPPPPPPWW',
+  '..dddddddd..',
+];
+
 export function scroll(): PixelBuffer {
   const b = new PixelBuffer(16, 12);
-  b.groundShadow(8, 10, 6, 1.6, 90);
-  b.fillRect(3, 3, 10, 6, P.sand);
-  b.hline(3, 12, 3, shade(P.sand, 0.3));
-  b.fillRect(1, 2, 3, 8, P.woodDark);
-  b.fillRect(12, 2, 3, 8, P.woodDark);
-  for (let i = 0; i < 3; i++) b.hline(5, 11, 4 + i * 2, P.sandDark);
+  b.groundShadow(8, 10, 6, 1.4, 90);
+  b.blit(
+    parseArt(SCROLL_ART, {
+      p: R.paper[4],
+      P: R.paper[3],
+      d: R.paper[2],
+      t: R.sand[1],
+      W: R.wood[1],
+    }),
+    2,
+    2,
+  );
   b.selOutline();
   return b;
 }

@@ -268,13 +268,25 @@ export class PixelBuffer {
     }
   }
 
-  /** Axis-aligned ellipse. `ry` defaults to `rx` (circle). */
+  /**
+   * Axis-aligned ellipse, rasterised the way pixel artists draw circles.
+   *
+   * Testing `(dx/r)^2 + (dy/r)^2 <= 1` against pixel *corners* pinches the top
+   * and bottom of a circle down to a single pixel — the classic jaggy dome that
+   * makes procedural blobs look wrong. Testing against pixel *centres* with the
+   * radius pushed out by half a pixel produces the canonical run lengths
+   * instead: a radius-4 circle comes out 5,7,9,9,9,9,9,7,5 wide, which is
+   * exactly the circle a person would draw by hand.
+   */
   ellipse(cx: number, cy: number, rx: number, ry: number, c: RGBA, filled = true): void {
     if (rx <= 0 || ry <= 0) return;
-    for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++) {
-      for (let x = Math.floor(cx - rx); x <= Math.ceil(cx + rx); x++) {
-        const dx = (x - cx) / rx;
-        const dy = (y - cy) / ry;
+    // Very small radii need a smaller bias or they square off.
+    const ex = rx + (rx < 1.6 ? 0.2 : 0.5);
+    const ey = ry + (ry < 1.6 ? 0.2 : 0.5);
+    for (let y = Math.floor(cy - ey); y <= Math.ceil(cy + ey); y++) {
+      for (let x = Math.floor(cx - ex); x <= Math.ceil(cx + ex); x++) {
+        const dx = (x - cx) / ex;
+        const dy = (y - cy) / ey;
         const d = dx * dx + dy * dy;
         if (d <= 1.0) {
           if (filled) this.blend(x, y, c);
@@ -300,7 +312,8 @@ export class PixelBuffer {
         const px = x0 + vx * t;
         const py = y0 + vy * t;
         const d = Math.hypot(x - px, y - py);
-        if (d <= r) this.blend(x, y, c);
+        // Same half-pixel bias as `ellipse`, so limb caps stay round.
+        if (d <= r + (r < 1.6 ? 0.2 : 0.5)) this.blend(x, y, c);
       }
     }
   }

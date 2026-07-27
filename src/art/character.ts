@@ -8,7 +8,7 @@
  *
  * Frame layout: 32x36, anchor at the feet (16, 30).
  */
-import { PixelBuffer, mix, rgba, shade, type RGBA } from './pixel';
+import { PixelBuffer, mix, parseArt, rgba, shade, type RGBA } from './pixel';
 import { P, R } from './palette';
 import { bakeSheet, clip, type Clip, type Sheet } from './sheet';
 
@@ -163,9 +163,13 @@ function drawArm(
   const elbowY = (sy + hy) / 2 + 0.5;
   buf.capsule(sx, sy, elbowX, elbowY, 1.5, coat);
   buf.capsule(elbowX, elbowY, hx, hy, 1.3, coat);
-  // Cuff + hand
-  buf.capsule(hx, hy, hx, hy, 1.3, isBack ? back(s.accentDark) : s.accentDark);
-  buf.ellipse(hx, hy + 1, 1.4, 1.4, skin);
+  // The cuff is one pixel of trim and the hand a deliberate 2x2 block. A
+  // blended dab here just reads as a stray coloured pixel at this size.
+  const hxi = Math.round(hx);
+  const hyi = Math.round(hy);
+  buf.set(hxi, hyi, isBack ? back(s.accentDark) : s.accentDark);
+  buf.fillRect(hxi - 1, hyi + 1, 2, 2, skin);
+  buf.set(hxi, hyi + 2, isBack ? back(s.skinDark) : s.skinDark);
 }
 
 function drawTorso(buf: PixelBuffer, cx: number, shY: number, hipY: number, s: Skin, dir: Dir, twist: number): void {
@@ -203,67 +207,110 @@ function drawTorso(buf: PixelBuffer, cx: number, shY: number, hipY: number, s: S
   }
 }
 
-function drawHead(buf: PixelBuffer, cx: number, cy: number, s: Skin, dir: Dir): void {
-  const faceShift = dir === 1 ? 1 : 0;
-  // Skull. Deliberately oversized relative to the body — a chunky head is what
-  // keeps a 22px-tall character readable when it is 3 screen-pixels wide.
-  buf.ellipse(cx, cy, 4.5, 4.6, s.skin);
-  // Jaw shading
-  for (let y = Math.floor(cy); y <= Math.ceil(cy + 4); y++) {
-    for (let x = Math.floor(cx - 5); x <= Math.ceil(cx + 5); x++) {
-      const dx = (x - cx) / 4.5;
-      const dy = (y - cy) / 4.6;
-      if (dx * dx + dy * dy <= 1 && y >= cy + 2) buf.blend(x, y, rgba(s.skinDark, 150));
-    }
-  }
+/**
+ * The head is authored, not generated.
+ *
+ * It is nine pixels across and carries the whole read of the character, so
+ * every pixel is placed by hand: the skull silhouette uses the canonical
+ * 5-7-9-9-9-9-9-7-5 circle run, the hair highlight sits on the upper-left
+ * (following the key light) instead of banding straight across the brow, and
+ * the eyes and mouth are single deliberate pixels rather than blended dabs.
+ *
+ * L/H/D = hair light / mid / dark, S/s = skin / skin shade, e = eye, m = mouth,
+ * C/c/k/g = hood light / dark / cavity / eye-glow.
+ */
+const HEAD_DOWN = [
+  '..LLHHH..',
+  '.LLHHHHD.',
+  'LLHHHHHHD',
+  'LHHHHHHHD',
+  'LHSSSSSsD',
+  'HHSeSeSsD',
+  'HHSSmSSsD',
+  '.HsSSSss.',
+  '..sSSSs..',
+];
+
+const HEAD_SIDE = [
+  '..LLHHH..',
+  '.LLHHHHH.',
+  'LLHHHHHHD',
+  'LHHHHHSSD',
+  'LHHSSSSSs',
+  'HHSSSeSSs',
+  'HHSSSmSss',
+  '.HsSSSss.',
+  '..sSSSs..',
+];
+
+const HEAD_UP = [
+  '..LLHHH..',
+  '.LLHHHHD.',
+  'LLHHHHHHD',
+  'LHHHHHHHD',
+  'LHHHHHHHD',
+  'HHHHHHHHD',
+  'HHHDDDHHD',
+  '.HHDDDHH.',
+  '..HHHHH..',
+];
+
+const HOOD_DOWN = [
+  '..CCCCC..',
+  '.CCCCCCC.',
+  'CCCCCCCCc',
+  'CCCkkkCCc',
+  'CCkkkkkCc',
+  'CCkgkgkCc',
+  'CCkkkkkCc',
+  '.CCkkkCC.',
+  '..CCCCC..',
+];
+
+const HOOD_SIDE = [
+  '..CCCCC..',
+  '.CCCCCCC.',
+  'CCCCCCCCc',
+  'CCCCkkkCc',
+  'CCCkkkkkc',
+  'CCCkkgkkc',
+  'CCCkkkkkc',
+  '.CCCkkkC.',
+  '..CCCCC..',
+];
+
+const HOOD_UP = [
+  '..CCCCC..',
+  '.CCCCCCC.',
+  'CCCCCCCCc',
+  'CCCCCCCCc',
+  'CCCCCCCCc',
+  'CCCCCCCCc',
+  'CCCCCCCCc',
+  '.CCCCCCC.',
+  '..CCCCC..',
+];
+
+function headArt(s: Skin, dir: Dir): PixelBuffer {
   if (s.hooded) {
-    // Hood: full cowl with a dark face hole.
-    buf.ellipse(cx, cy - 0.5, 4.6, 4.8, s.coat);
-    buf.ellipse(cx - 4.4, cy + 1, 1.6, 2.2, s.coatDark);
-    buf.ellipse(cx + 4.4, cy + 1, 1.6, 2.2, s.coatDark);
-    if (dir !== 2) {
-      buf.ellipse(cx + faceShift, cy + 1.2, 2.6, 2.4, shade(s.coatDark, -0.55));
-      if (dir === 0) {
-        buf.set(Math.round(cx - 1), Math.round(cy + 1), P.magic);
-        buf.set(Math.round(cx + 1), Math.round(cy + 1), P.magic);
-      } else {
-        buf.set(Math.round(cx + 1), Math.round(cy + 1), P.magic);
-      }
-    }
-    return;
+    const rows = dir === 0 ? HOOD_DOWN : dir === 1 ? HOOD_SIDE : HOOD_UP;
+    return parseArt(rows, {
+      C: s.coat,
+      c: s.coatDark,
+      k: shade(s.coatDark, -0.6),
+      g: P.magic,
+    });
   }
-  // Hair cap, then carve the face back out.
-  buf.ellipse(cx, cy - 1.3, 4.8, 4.1, s.hair);
-  buf.ellipse(cx, cy - 2.2, 4.5, 2.7, mix(s.hair, P.hairLight, 0.45));
-  if (dir !== 2) {
-    buf.ellipse(cx + faceShift, cy + 1.3, 3.7, 3.4, s.skin);
-    for (let y = Math.floor(cy + 2); y <= Math.ceil(cy + 5); y++)
-      for (let x = Math.floor(cx - 4); x <= Math.ceil(cx + 5); x++) {
-        const dx = (x - cx - faceShift) / 3.7;
-        const dy = (y - cy - 1.3) / 3.4;
-        if (dx * dx + dy * dy <= 1) buf.blend(x, y, rgba(s.skinDark, 110));
-      }
-    // Fringe sitting on the brow, plus sideburns.
-    buf.hline(cx - 3, cx + 3, Math.round(cy - 1), s.hair);
-    buf.set(Math.round(cx - 4), Math.round(cy), s.hair);
-    buf.set(Math.round(cx + 4), Math.round(cy), s.hair);
-    buf.set(Math.round(cx - 2), Math.round(cy - 1), mix(s.hair, P.hairLight, 0.5));
-    // Eyes
-    if (dir === 0) {
-      buf.set(Math.round(cx - 2), Math.round(cy + 1), s.ink);
-      buf.set(Math.round(cx + 2), Math.round(cy + 1), s.ink);
-      buf.blend(Math.round(cx), Math.round(cy + 3), rgba(s.skinDark, 200));
-    } else {
-      buf.set(Math.round(cx + 2), Math.round(cy + 1), s.ink);
-      buf.blend(Math.round(cx + 3), Math.round(cy + 2), rgba(s.skinDark, 190));
-    }
-  } else {
-    // Back of the head: hair all over, with a small tuft.
-    buf.ellipse(cx, cy + 0.6, 3.6, 3.2, s.hair);
-    buf.set(Math.round(cx), Math.round(cy + 4), s.hairDark);
-  }
-  // Hair outline shadow under the cap
-  buf.hline(cx - 4, cx + 4, Math.round(cy - 4), s.hairDark);
+  const rows = dir === 0 ? HEAD_DOWN : dir === 1 ? HEAD_SIDE : HEAD_UP;
+  return parseArt(rows, {
+    L: mix(s.hair, P.hairLight, 0.55),
+    H: s.hair,
+    D: s.hairDark,
+    S: s.skin,
+    s: s.skinDark,
+    e: s.ink,
+    m: s.skinDark,
+  });
 }
 
 function drawScarf(buf: PixelBuffer, cx: number, shY: number, s: Skin, dir: Dir, flap: number): void {
@@ -311,6 +358,13 @@ export function drawHumanoid(s: Skin, dir: Dir, p: Pose, flap = 0): PixelBuffer 
 
   // Front leg + torso.
   drawLeg(buf, cx + legSpread, hipY, cx + legSpread + p.legAX, footY + p.legAY, s, false);
+  if (dir !== 1) {
+    // Front and back views: cut a one-pixel dark seam between the legs, or
+    // they merge into a single trouser-shaped mass.
+    for (let y = Math.round(hipY) + 2; y <= Math.round(footY) - 2; y++) {
+      if (buf.alphaAt(cx, y) > 200) buf.set(cx, y, s.pantsDark);
+    }
+  }
   drawTorso(buf, cx + p.lean, shY, hipY, s, dir, p.twist);
   drawScarf(buf, cx + p.lean, shY, s, dir, flap);
   drawArm(
@@ -322,7 +376,8 @@ export function drawHumanoid(s: Skin, dir: Dir, p: Pose, flap = 0): PixelBuffer 
     s,
     false,
   );
-  drawHead(buf, headX, headY, s, dir);
+  // Head: authored pixel art, blitted so it lands on whole pixels.
+  buf.blit(headArt(s, dir), Math.round(headX) - 4, Math.round(headY) - 4);
   return buf;
 }
 

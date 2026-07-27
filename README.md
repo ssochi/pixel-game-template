@@ -45,6 +45,18 @@ npm run build    # 类型检查 + 打包到 dist/
 
 **7. 地面明度压在道具之下。** 广场石板只用色阶的下半段：地面是画面上最大的一块面，如果和道具一样亮，站在上面的东西就没有剪影了。俯视图里规则的错缝砖块会读成"墙"，所以石板的行高、列宽、切角都是随机的。
 
+**8. 小于约 12px 的东西必须手画。** 椭圆生成的药水瓶就是一坨有颜色的团块。药水、金币、钥匙、宝石、心、弹药箱、卷轴、蘑菇、花，以及**人物的头**，全部是用 `parseArt()` 逐像素排版的位图（`POTION_ART` / `HEAD_DOWN` 之类）。位图里只描述形体，描边交给 `selOutline()` 后加。
+
+**9. 圆要按像素画法光栅化。** 用像素**角点**去测 `(dx/r)²+(dy/r)² <= 1`，圆的顶端会收成 1px 尖，这就是所有程序化团块毛糙的根源。改成测**像素中心**、半径外扩半格之后，r=4 的圆行宽正好是 5-7-9-9-9-9-9-7-5——手画圆的标准行程。这一行改动同时修好了工程里每一个圆、椭圆、石头、脑袋、蘑菇伞。
+
+**10. 需要精确形状的地方用行宽表，不用光栅化。** 旋转的金币是一张 `COIN_ROWS = [4,6,8,8,8,8,6,4]` 的行宽表按帧压缩出来的——在这个尺寸上，"手挑的行程序列"就是金币和一坨橙色污渍的全部差别。
+
+**11. 石头是"面"，不是"团"。** 旧版把半透明椭圆叠起来再撒噪点，得到一摊灰色水渍：没有剪影，没有体积。现在是底宽顶窄的硬边剪影 + 一条直的转折线分出受光顶面、正面和背光底面，加一条**直**裂缝——石头之所以像石头，靠的是平面而不是渐变。
+
+**12. 人物的手是 2x2 实块，腿之间留 1px 暗缝。** 混色画出来的手在这个尺寸上只会变成一个杂色点；正面视角两条腿不分缝就会糊成一条裤子。
+
+> 开 `/proof.html` 可以看到所有素材 8 倍放大 + 像素网格 + 锚点十字线。像素画只能在像素级别判断——毛刺、断线、孤立杂点在 1:1 下完全看不出来，8:1 下一目了然。`?g=hero` / `?g=items` / `?g=props` 切换分组。
+
 参考：[SLYNYRD Pixelblog 1 – Color Palettes](https://www.slynyrd.com/blog/2018/1/10/pixelblog-1-color-palettes)、[Pixelblog 20 – Top Down Tiles](https://www.slynyrd.com/blog/2019/8/27/pixelblog-20-top-down-tiles)、[Pixelblog 21 – Top Down Objects](https://www.slynyrd.com/blog/2019/9/18/pixelblog-21-top-down-objects)、[Derek Yu – Pixel Art: Common Mistakes](https://www.derekyu.com/makegames/pixelart2.html)、[Pixel Parmesan – Anti-Aliasing Fundamentals](https://pixelparmesan.com/blog/anti-aliasing-fundamentals-for-pixel-artists)。
 
 ## 测试内容

@@ -46,12 +46,13 @@ function slimeFrame(squash: number, stretch: number, lift: number, color: RGBA, 
     const dx = rng.range(-rx * 0.7, rx * 0.7);
     b.ellipse(AX + dx, cy + ry - 0.5, 1.4, 1.8 + rng.range(0, 1), rgba(shade(color, -0.2), 220 * alpha));
   }
-  // Eyes
-  const ey = cy - ry * 0.1;
-  b.ellipse(AX - 3, ey, 1.8, 2, rgba(P.white, 240 * alpha));
-  b.ellipse(AX + 3, ey, 1.8, 2, rgba(P.white, 240 * alpha));
-  b.ellipse(AX - 3, ey + 0.4, 0.9, 1, rgba(P.ink, 255 * alpha));
-  b.ellipse(AX + 3, ey + 0.4, 0.9, 1, rgba(P.ink, 255 * alpha));
+  // Eyes: a 2x2 white with a single dark pupil pixel. Anything softer turns
+  // into a grey smear once the sprite is quantised.
+  const ey = Math.round(cy - ry * 0.1);
+  for (const ex of [AX - 3, AX + 2]) {
+    b.fillRect(ex, ey - 1, 2, 3, rgba(P.white, 240 * alpha));
+    b.set(ex + (ex < AX ? 0 : 1), ey, rgba(P.ink, 255 * alpha));
+  }
   if (alpha >= 1) b.selOutline();
   else b.outline(rgba(P.ink, 235 * alpha));
   b.rimLight(P.white, 0.25);
