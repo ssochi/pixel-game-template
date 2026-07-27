@@ -44,6 +44,8 @@ export interface Deco {
   /** Collision radius in px; 0 means walk-through. */
   solid: number;
   label: string;
+  /** Skipped by every draw pass. Foraged plants set this until they regrow. */
+  hidden?: boolean;
 }
 
 export interface Solid {
@@ -98,6 +100,8 @@ export class Scene {
   readonly homes: Area[] = [];
   /** Named work areas, so the cast in `social.ts` can be posted to them. */
   readonly areas: Record<string, Area> = {};
+  /** Wild pickings: mushrooms, flowers and fallen wood you can gather. */
+  readonly forage: { deco: Deco; item: string; gone: number }[] = [];
   private lightSeed = 0;
   private doorSeed = 1;
   private rng = new RNG(20260727);
@@ -629,10 +633,14 @@ export class Scene {
         phase: rng.range(0, 4),
       }),
     );
-    place(52, 5, (x, y) =>
-      this.add(n.flowers[rng.int(0, 2)], x, y, { flip: rng.chance(0.5), label: 'flower', phase: rng.range(0, 4) }),
-    );
-    place(14, 6, (x, y) => this.add(n.mushrooms[0], x, y, { label: 'mushroom' }));
+    place(52, 5, (x, y) => {
+      const d = this.add(n.flowers[rng.int(0, 2)], x, y, { flip: rng.chance(0.5), label: 'flower', phase: rng.range(0, 4) });
+      this.forage.push({ deco: d, item: 'flower', gone: -1 });
+    });
+    place(14, 6, (x, y) => {
+      const d = this.add(n.mushrooms[0], x, y, { label: 'mushroom' });
+      this.forage.push({ deco: d, item: 'mushroom', gone: -1 });
+    });
     place(5, 12, (x, y) => this.add(n.log, x, y, { solid: 10, flip: rng.chance(0.5), label: 'log' }));
     place(6, 10, (x, y) => this.add(n.stump, x, y, { solid: 8, label: 'stump' }));
 

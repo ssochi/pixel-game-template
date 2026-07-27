@@ -151,6 +151,12 @@ export class Villager extends Agent {
   readonly name: string;
   /** Set for the named cast; empty for background extras. */
   castId = '';
+  /**
+   * True while this villager is considered to be inside a building. Their
+   * interior copy is the one you meet, so the outdoor figure stops drawing and
+   * stops answering — otherwise the shopkeeper is visibly in two places.
+   */
+  indoors = false;
   readonly schedule: ScheduleSlot[];
   private slot = -1;
   activity: Activity = 'wander';

@@ -19,11 +19,11 @@ import { Particles } from './game/particles';
 import { Player } from './game/player';
 import { Farm, CROPS, FARM, Soil } from './game/farm';
 import { TILE } from './art/farm';
-import { Inventory, ITEMS } from './game/inventory';
+import { Inventory, ITEMS, SHOP_STOCK } from './game/inventory';
 import { RoomBuilder, type Room } from './game/interior';
 import { Scene } from './game/scene';
 import { BRIDGE, MILL, WORLD_H, WORLD_W, bakeGround } from './game/terrain';
-import { Gallery, drawDayCard, drawDialogue, drawHotbar, drawHud } from './game/ui';
+import { Gallery, drawDayCard, drawDialogue, drawHotbar, drawHud, drawShop } from './game/ui';
 import { River } from './game/water';
 
 const boot = document.getElementById('boot') as HTMLDivElement;
@@ -61,6 +61,9 @@ function start(): void {
     const anims = assets.npcs[i % assets.npcs.length];
     return new Villager(anims, sp.x, sp.y, sp.home, 1000 + i * 37, sp.kind, sp.stationary, sp.schedule);
   });
+
+  /** Workplaces that are rooms you walk into rather than spots on the map. */
+  const INDOOR_WORK = new Set<(typeof CAST)[number]['work']>(['shop', 'tavern', 'forge', 'mill']);
 
   // The named cast: each one posted to their own workplace with a full day.
   const social = new Social();
@@ -117,6 +120,9 @@ function start(): void {
   let sleepT = 0;
   let sleeping = false;
   let useCd = 0;
+  /** Index into SHOP_STOCK while the shop menu is open. */
+  let shopOpen = false;
+  let shopIndex = 0;
 
   function useTool(): void {
     const held = inv.held;
@@ -191,8 +197,12 @@ function start(): void {
     }
     const crowd = room ? roomVillagers : villagers;
     let best: Villager | null = null;
-    let bestD = 30;
+    // Wide enough to reach over a shop counter: the counter's own collision
+    // radius holds you ~34px off the keeper standing behind it, so anything
+    // tighter makes shopkeepers literally unreachable. Nearest still wins.
+    let bestD = 44;
     for (const v of crowd) {
+      if (v.indoors) continue;
       const d = Math.hypot(v.x - player.x, v.y - player.y);
       if (d < bestD) {
         bestD = d;
@@ -202,6 +212,14 @@ function start(): void {
     if (best) {
       const def = best.castId ? castOf.get(best.castId) : undefined;
       if (def) {
+        // Mara behind her own counter is a shop, not a person to hand turnips
+        // to — this has to come before the gift check or you can never buy
+        // anything while carrying produce.
+        if (def.id === 'mara' && room?.kind === 'shop') {
+          shopOpen = true;
+          shopIndex = 0;
+          return;
+        }
         // Holding something they might want? Offer it as a gift.
         const held = inv.slots[inv.selected];
         const heldDef = held.item ? ITEMS[held.item] : null;
@@ -271,6 +289,17 @@ function start(): void {
       return;
     }
     if (!room) {
+      // Wild pickings: mushrooms and flowers you can gather by hand.
+      for (const f of scene.forage) {
+        if (f.gone >= 0) continue;
+        if (Math.hypot(f.deco.x - player.x, f.deco.y - player.y) > 20) continue;
+        if (!inv.add(f.item, 1)) break;
+        f.gone = day;
+        f.deco.hidden = true; // off the draw lists until it regrows
+        fx.sparks(f.deco.x, f.deco.y - 6, -Math.PI / 2, 5);
+        return;
+      }
+
       // Shipping bin: sells everything sellable in one go.
       const bin = scene.bin;
       if (Math.hypot(bin.x - player.x, bin.y - player.y) < 26) {
@@ -304,6 +333,13 @@ function start(): void {
     farm.newDay();
     energy = 1;
     dayT = 0.26;
+    // Foraged plants grow back after a few days.
+    for (const f of scene.forage) {
+      if (f.gone >= 0 && day - f.gone >= 3) {
+        f.gone = -1;
+        f.deco.hidden = false;
+      }
+    }
   }
 
   // --- debug / display state ------------------------------------------------
@@ -361,7 +397,18 @@ function start(): void {
       player.stop();
       roomVillagers = room.npcs.map((n, i) => {
         const area = { x0: n.x - 10, y0: n.y - 4, x1: n.x + 10, y1: n.y + 4 };
-        return new Villager(assets.npcs[n.skin % assets.npcs.length], n.x, n.y, area, 4200 + i * 61, n.role, true);
+        const def = n.cast ? castOf.get(n.cast) : undefined;
+        const v = new Villager(
+          assets.npcs[(def ? def.skin : n.skin) % assets.npcs.length],
+          n.x,
+          n.y,
+          area,
+          4200 + i * 61,
+          def ? def.name : n.role,
+          true,
+        );
+        if (def) v.castId = def.id;
+        return v;
       });
       camera.follow(player.x, player.y, room.w, room.h, 1, true);
     } else if (pendingExit) {
@@ -401,10 +448,34 @@ function start(): void {
         dayT = t;
         dayPaused = true;
       },
+      /** Skip the walk and drop straight into an interior. */
+      enter(kind: string, seed = 1) {
+        const door = scene.doors.find((d) => d.kind === kind);
+        enterRoom(rooms.get(kind as never, seed), door ? door.x + door.w / 2 : player.x, door ? door.y + door.h : player.y);
+      },
+      leave: leaveRoom,
+      state() {
+        return { room: room?.kind ?? null, shopOpen, shopIndex, gold: inv.gold, day };
+      },
     };
   }
 
   function update(dt: number): void {
+    // The shop menu takes all input while it is open — before the gallery
+    // toggle, or Tab would open the gallery on top of it instead of closing it.
+    if (shopOpen) {
+      if (input.pressed('tab') || input.pressed('escape') || input.pressed('q')) shopOpen = false;
+      if (input.pressed('s', 'arrowdown')) shopIndex = (shopIndex + 1) % SHOP_STOCK.length;
+      if (input.pressed('w', 'arrowup')) shopIndex = (shopIndex + SHOP_STOCK.length - 1) % SHOP_STOCK.length;
+      if (input.pressed('e', 'enter')) {
+        const pick = SHOP_STOCK[shopIndex];
+        if (inv.buy(pick.item, pick.price, 1)) fx.sparks(player.x, player.y - 14, -Math.PI / 2, 4);
+      }
+      player.stop();
+      wheel = 0;
+      return;
+    }
+
     if (input.pressed('tab')) gallery.open = !gallery.open;
     if (gallery.open) {
       const kb = (input.isDown('s', 'arrowdown') ? 1 : 0) - (input.isDown('w', 'arrowup') ? 1 : 0);
@@ -489,6 +560,13 @@ function start(): void {
     }
 
     for (const v of villagers) v.update(dt, scene.solids, dayT);
+    // Shopkeeper, innkeeper, smith and miller work under a roof. While their
+    // shift is on they are represented by the NPC inside that room instead.
+    for (const v of villagers) {
+      if (!v.castId) continue;
+      const def = castOf.get(v.castId);
+      v.indoors = !!def && INDOOR_WORK.has(def.work) && v.activity === 'work';
+    }
     gossip(villagers, dt);
     for (const a of animals) a.update(dt, scene.solids);
     for (const d of ducks) d.update(dt, scene.solids);
@@ -549,6 +627,7 @@ function start(): void {
       drawHud(ctx, hudState());
       drawHotbar(ctx, assets, inv);
       if (talk) drawDialogue(ctx, talk.speaker, talk.lines);
+      if (shopOpen) drawShop(ctx, assets, SHOP_STOCK, shopIndex, inv.gold);
       if (sleeping) drawDayCard(ctx, day, Math.min(1, sleepT < 1 ? sleepT : 2 - sleepT));
       return;
     }
@@ -561,7 +640,7 @@ function start(): void {
     // 3. flat decals: rugs, grass, lily pads, bridge deck
     const pad = 80;
     for (const d of scene.decos) {
-      if (d.layer !== 'ground') continue;
+      if (d.layer !== 'ground' || d.hidden) continue;
       if (d.x < camX - pad || d.x > camX + GAME_W + pad || d.y < camY - pad || d.y > camY + GAME_H + pad) continue;
       drawClip(ctx, d.clip, time + d.phase, d.x - camX, d.y - camY, d.flip);
     }
@@ -595,7 +674,7 @@ function start(): void {
       items.push({ y: by, draw: () => drawFrame(ctx, sheet, 0, bx - camX, by - camY) });
     }
     for (const d of scene.decos) {
-      if (d.layer !== 'sorted') continue;
+      if (d.layer !== 'sorted' || d.hidden) continue;
       if (d.x < camX - pad || d.x > camX + GAME_W + pad || d.y < camY - pad || d.y > camY + GAME_H + pad) continue;
       items.push({
         y: d.sortY,
@@ -603,7 +682,10 @@ function start(): void {
       });
     }
     for (const s of slimes) items.push({ y: s.sortY, draw: () => s.draw(ctx, camX, camY) });
-    for (const v of villagers) items.push({ y: v.sortY, draw: () => v.draw(ctx, camX, camY, assets.emotes) });
+    for (const v of villagers) {
+      if (v.indoors) continue;
+      items.push({ y: v.sortY, draw: () => v.draw(ctx, camX, camY, assets.emotes) });
+    }
     for (const a of animals) items.push({ y: a.sortY, draw: () => a.draw(ctx, camX, camY) });
     for (const d of ducks) items.push({ y: d.sortY, draw: () => d.draw(ctx, camX, camY) });
     items.push({ y: player.y, draw: () => player.draw(ctx, camX, camY) });
@@ -657,6 +739,7 @@ function start(): void {
     drawHud(ctx, hudState());
     drawHotbar(ctx, assets, inv);
     if (talk) drawDialogue(ctx, talk.speaker, talk.lines);
+    if (shopOpen) drawShop(ctx, assets, SHOP_STOCK, shopIndex, inv.gold);
     if (sleeping) drawDayCard(ctx, day, Math.min(1, sleepT < 1 ? sleepT : 2 - sleepT));
   }
 

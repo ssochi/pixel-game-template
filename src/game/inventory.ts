@@ -6,6 +6,7 @@
  * for. Adding a crop is one entry here plus one in `CROPS`.
  */
 import type { Assets } from '../art/assets';
+import type { CropKind } from '../art/farm';
 import type { Sheet } from '../art/sheet';
 
 export type ItemUse = 'till' | 'water' | 'chop' | 'mine' | 'cut' | 'plant' | 'none';
@@ -38,6 +39,8 @@ export const ITEMS: Record<string, ItemDef> = {
   wood: { id: 'wood', name: 'WOOD', use: 'none', price: 4, tool: false },
   stone: { id: 'stone', name: 'STONE', use: 'none', price: 4, tool: false },
   fibre: { id: 'fibre', name: 'FIBRE', use: 'none', price: 2, tool: false },
+  mushroom: { id: 'mushroom', name: 'MUSHROOM', use: 'none', price: 18, tool: false },
+  flower: { id: 'flower', name: 'WILD FLOWER', use: 'none', price: 14, tool: false },
 };
 
 export interface Slot {
@@ -111,6 +114,14 @@ export class Inventory {
     return this.slots.filter((s) => s.item === item).reduce((a, s) => a + s.count, 0);
   }
 
+  /** Spend gold on a stack. Returns false if you cannot afford it or are full. */
+  buy(item: string, price: number, n = 1): boolean {
+    if (this.gold < price * n) return false;
+    if (!this.add(item, n)) return false;
+    this.gold -= price * n;
+    return true;
+  }
+
   /** Sell everything sellable; tools and seeds are kept. */
   sellProduce(): number {
     let total = 0;
@@ -127,12 +138,19 @@ export class Inventory {
   }
 }
 
+/** What Mara sells. Seed prices are deliberately well under the crop's value. */
+export const SHOP_STOCK: { item: string; price: number }[] = [
+  { item: 'turnipSeeds', price: 12 },
+  { item: 'wheatSeeds', price: 9 },
+  { item: 'pumpkinSeeds', price: 40 },
+];
+
 /** Icon for an item: tools have their own, produce reuses the crop sprite. */
 export function iconFor(a: Assets, id: string): Sheet | null {
   const def = ITEMS[id];
   if (!def) return null;
   if (def.tool) return a.farm.tools[id] ?? null;
-  if (def.use === 'plant') return a.farm.tools.seeds;
+  if (def.use === 'plant') return def.crop ? a.farm.seeds[def.crop as CropKind] : a.farm.tools.seeds;
   switch (id) {
     case 'turnip':
       return a.farm.crops.turnip[3];
@@ -146,6 +164,10 @@ export function iconFor(a: Assets, id: string): Sheet | null {
       return a.nature.rocks[0];
     case 'fibre':
       return a.nature.grass[0].sheet;
+    case 'mushroom':
+      return a.nature.mushrooms[0];
+    case 'flower':
+      return a.nature.flowers[0].sheet;
     default:
       return null;
   }

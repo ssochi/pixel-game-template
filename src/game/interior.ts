@@ -25,6 +25,12 @@ export interface RoomNpc {
   skin: number;
   /** Stands behind a counter and turns about. */
   role: string;
+  /**
+   * Id in `CAST` when this is a named villager at their own workplace. Without
+   * it the figure behind the counter is an anonymous extra, so friendship,
+   * gifts and the shop menu all silently do nothing.
+   */
+  cast?: string;
 }
 
 export interface Room {
@@ -203,7 +209,7 @@ export class RoomBuilder {
           this.add(room, p.chairR, tx + 26, ty + 2, { solid: 5, flip: true });
         }
         this.add(room, I.paintings[0], 112, wallY - 12, { sortY: 0 });
-        room.npcs.push({ x: room.w - 74, y: wallY + 26, skin: 0, role: 'innkeeper' });
+        room.npcs.push({ x: room.w - 74, y: wallY + 26, skin: 0, role: 'innkeeper', cast: 'orin' });
         room.npcs.push({ x: 106, y: room.h - 70, skin: 7, role: 'drinker' });
         room.npcs.push({ x: 168, y: room.h - 40, skin: 5, role: 'drinker' });
         break;
@@ -218,7 +224,7 @@ export class RoomBuilder {
         this.add(room, p.barrels[0], 118, wallY + 48, { solid: 8 });
         this.add(room, I.plant, room.w - 26, room.h - 26, { solid: 6 });
         this.add(room, I.rugs[1], cx - 40, room.h - 48, { layer: 'ground' });
-        room.npcs.push({ x: cx + 42, y: wallY + 28, skin: 2, role: 'shopkeeper' });
+        room.npcs.push({ x: cx + 42, y: wallY + 28, skin: 2, role: 'shopkeeper', cast: 'mara' });
         room.npcs.push({ x: cx - 44, y: room.h - 52, skin: 6, role: 'customer' });
         break;
       }
@@ -233,7 +239,7 @@ export class RoomBuilder {
         this.add(room, I.rugs[0], cx + 20, room.h - 46, { layer: 'ground' });
         this.add(room, I.paintings[1], 150, wallY - 12, { sortY: 0 });
         this.add(room, I.plant, room.w - 22, room.h - 30, { solid: 6 });
-        room.npcs.push({ x: 70, y: wallY + 26, skin: 0, role: 'innkeeper' });
+        room.npcs.push({ x: 70, y: wallY + 26, skin: 0, role: 'innkeeper', cast: 'orin' });
         break;
       }
       case 'smithy': {
@@ -244,7 +250,7 @@ export class RoomBuilder {
         this.add(room, I.shelves[1], room.w - 60, wallY - 4, { sortY: 0 });
         this.add(room, p.crates[1], 40, room.h - 34, { solid: 9 });
         this.add(room, I.sacks, room.w - 44, room.h - 28, { solid: 9 });
-        room.npcs.push({ x: cx + 8, y: room.h - 68, skin: 3, role: 'smith' });
+        room.npcs.push({ x: cx + 8, y: room.h - 68, skin: 3, role: 'smith', cast: 'brann' });
         break;
       }
       case 'chapel': {
@@ -269,7 +275,7 @@ export class RoomBuilder {
         this.add(room, p.crates[0], cx, wallY + 44, { solid: 9 });
         this.add(room, I.stairs, room.w - 40, wallY + 30, { solid: 14 });
         this.add(room, I.shelves[1], cx + 50, wallY - 4, { sortY: 0 });
-        room.npcs.push({ x: cx - 30, y: room.h - 50, skin: 4, role: 'miller' });
+        room.npcs.push({ x: cx - 30, y: room.h - 50, skin: 4, role: 'miller', cast: 'halder' });
         break;
       }
       case 'barn': {

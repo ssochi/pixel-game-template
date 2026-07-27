@@ -34,7 +34,7 @@ export const CAST: VillagerDef[] = [
     skin: 2,
     work: 'shop',
     activity: 'work',
-    likes: ['pumpkin', 'turnip'],
+    likes: ['pumpkin', 'turnip', 'flower'],
     lines: [
       [
         ['SO YOU TOOK THE OLD PLOT.', 'BRAVE. IT HAS BEEN FALLOW', 'SINCE BEFORE I CAME HERE.'],
@@ -102,7 +102,7 @@ export const CAST: VillagerDef[] = [
     skin: 1,
     work: 'field',
     activity: 'work',
-    likes: ['turnip', 'wheat', 'fibre'],
+    likes: ['turnip', 'wheat', 'flower'],
     lines: [
       [
         ['NEW HANDS IN THE VALLEY.', 'ABOUT TIME.'],
@@ -160,7 +160,7 @@ export const CAST: VillagerDef[] = [
     skin: 6,
     work: 'paddock',
     activity: 'work',
-    likes: ['wheat', 'fibre'],
+    likes: ['wheat', 'flower', 'mushroom'],
     lines: [
       [['THE BROWN COW GOT OUT AGAIN.', 'MIND THE GATE.']],
       [['SHEEP ARE SIMPLE COMPANY.', 'I PREFER IT MOST DAYS.']],
@@ -174,7 +174,7 @@ export const CAST: VillagerDef[] = [
     skin: 8,
     work: 'street',
     activity: 'wander',
-    likes: ['pumpkin', 'stone'],
+    likes: ['mushroom', 'stone'],
     lines: [
       [['...'], ['YOU ARE NOT FROM THE VALLEY', 'EITHER. I CAN TELL.']],
       [['I WALKED HERE FROM THE COAST.', 'IT TOOK A SEASON.']],

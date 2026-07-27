@@ -216,7 +216,7 @@ const TOOL_ART: Record<string, string[]> = {
   ],
 };
 
-function toolIcon(kind: string): PixelBuffer {
+function toolIcon(kind: string, seedColour?: RGBA): PixelBuffer {
   const map: Record<string, RGBA> = {
     W: R.metal[3],
     w: R.metal[4],
@@ -224,7 +224,9 @@ function toolIcon(kind: string): PixelBuffer {
     m: R.metal[2],
     S: R.sand[2],
     s: R.sand[3],
-    g: R.leaf[2],
+    // The grain inside a seed packet takes the colour of what it grows into,
+    // so three packets side by side in the shop are told apart at a glance.
+    g: seedColour ?? R.leaf[2],
   };
   const b = parseArt(TOOL_ART[kind], map);
   const out = new PixelBuffer(16, 16);
@@ -239,9 +241,17 @@ export interface FarmAssets {
   /** [kind][stage] */
   crops: Record<CropKind, Sheet[]>;
   tools: Record<string, Sheet>;
-  /** Little dirt-clod puff when a tile is tilled. */
+  /** A seed packet per crop, tinted with what it grows. */
+  seeds: Record<CropKind, Sheet>;
   seedBag: Sheet;
 }
+
+/** The grain colour on each crop's seed packet. */
+const SEED_TINT: Record<CropKind, RGBA> = {
+  turnip: R.purple[3],
+  pumpkin: R.fire[2],
+  wheat: R.gold[3],
+};
 
 function still(b: PixelBuffer, ax: number, ay: number): Sheet {
   return bakeSheet([b], ax, ay);
@@ -254,11 +264,16 @@ export function bakeFarm(): FarmAssets {
   }
   const tools: Record<string, Sheet> = {};
   for (const k of Object.keys(TOOL_ART)) tools[k] = still(toolIcon(k), 8, 8);
+  const seeds = {} as Record<CropKind, Sheet>;
+  for (const kind of ['turnip', 'pumpkin', 'wheat'] as CropKind[]) {
+    seeds[kind] = still(toolIcon('seeds', SEED_TINT[kind]), 8, 8);
+  }
   return {
     soilDry: still(soilTile(false, 1), 0, 0),
     soilWet: still(soilTile(true, 1), 0, 0),
     crops,
     tools,
+    seeds,
     seedBag: tools.seeds,
   };
 }

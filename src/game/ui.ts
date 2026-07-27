@@ -158,6 +158,47 @@ export function drawDialogue(ctx: CanvasRenderingContext2D, speaker: string, lin
   drawText(ctx, 'E', GAME_W - 24, y + h - 9, '#7f92b0');
 }
 
+/** Mara's shop: a list of stock with prices, and your purse. */
+export function drawShop(
+  ctx: CanvasRenderingContext2D,
+  a: Assets,
+  stock: { item: string; price: number }[],
+  index: number,
+  gold: number,
+): void {
+  const w = 170;
+  const rowH = 18;
+  const h = 22 + stock.length * rowH;
+  const x = Math.round((GAME_W - w) / 2);
+  const y = Math.round((GAME_H - h) / 2);
+  panel(ctx, x, y, w, h, 0.94);
+  drawText(ctx, 'GENERAL STORE', x + 6, y + 4, '#f0c261');
+  const purse = `${gold}G`;
+  drawText(ctx, purse, x + w - textWidth(purse) - 6, y + 4, '#f0c261');
+
+  stock.forEach((s, i) => {
+    const ry = y + 16 + i * rowH;
+    if (i === index) {
+      ctx.fillStyle = 'rgba(60,74,100,0.8)';
+      ctx.fillRect(x + 3, ry - 1, w - 6, rowH - 2);
+    }
+    const icon = iconFor(a, s.item);
+    if (icon) {
+      const k = Math.min(1, 12 / Math.max(icon.fw, icon.fh));
+      ctx.save();
+      ctx.translate(x + 12, ry + 7);
+      if (k !== 1) ctx.scale(k, k);
+      drawFrame(ctx, icon, 0, 0, icon.fh / 2);
+      ctx.restore();
+    }
+    const def = ITEMS[s.item];
+    drawText(ctx, def.name.slice(0, 16), x + 22, ry + 2, gold >= s.price ? '#e8eef8' : '#6b7690');
+    const p = `${s.price}G`;
+    drawText(ctx, p, x + w - textWidth(p) - 6, ry + 2, gold >= s.price ? '#f0c261' : '#6b7690');
+  });
+  drawText(ctx, 'W/S PICK   E BUY   TAB CLOSE', x + 6, y + h - 9, '#7f92b0');
+}
+
 /** Full-screen banner used for the day transition. */
 export function drawDayCard(ctx: CanvasRenderingContext2D, day: number, alpha: number): void {
   ctx.fillStyle = `rgba(6,7,12,${alpha.toFixed(3)})`;
