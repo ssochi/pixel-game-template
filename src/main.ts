@@ -11,11 +11,12 @@ import { drawClip } from './art/sheet';
 import { Input } from './engine/input';
 import { Camera, GAME_H, GAME_W, Screen } from './engine/screen';
 import { Slime } from './game/agents';
+import { Critter, Duck, Villager } from './game/npc';
 import { Lighting, type Light } from './game/lighting';
 import { Particles } from './game/particles';
 import { Player, type PlayerState } from './game/player';
 import { Scene } from './game/scene';
-import { BRIDGE, WORLD_H, WORLD_W, bakeGround } from './game/terrain';
+import { BRIDGE, MILL, WORLD_H, WORLD_W, bakeGround } from './game/terrain';
 import { Gallery, drawHud, drawInspect } from './game/ui';
 import { River } from './game/water';
 
@@ -37,16 +38,40 @@ function start(): void {
   const gallery = new Gallery(assets.gallery);
   const input = new Input(screen.canvas, (x, y) => screen.toInternal(x, y));
 
-  player.x = 250;
-  player.y = 300;
+  // Start on the high street, just west of the market square.
+  player.x = 480;
+  player.y = 505;
   camera.follow(player.x, player.y, WORLD_W, WORLD_H, 1, true);
 
+  // Slimes only live in the woods across the river, away from the town.
   const slimes = [
-    new Slime(assets, 560, 200),
-    new Slime(assets, 640, 480),
-    new Slime(assets, 830, 320),
-    new Slime(assets, 420, 540),
+    new Slime(assets, 1280, 200),
+    new Slime(assets, 1330, 760),
+    new Slime(assets, 1250, 880),
   ];
+
+  // Townsfolk: each spawn gets a skin, cycled so neighbours don't match.
+  const villagers = scene.villagerSpawns.map((sp, i) => {
+    const anims = assets.npcs[i % assets.npcs.length];
+    return new Villager(anims, sp.x, sp.y, sp.home, 1000 + i * 37, sp.kind, sp.stationary);
+  });
+
+  const animalOf = (kind: string) =>
+    kind === 'cow'
+      ? assets.animals.cow
+      : kind === 'pig'
+        ? assets.animals.pig
+        : kind === 'sheep'
+          ? assets.animals.sheep
+          : kind === 'goat'
+            ? assets.animals.goat
+            : assets.animals.chicken;
+  const animals = scene.animalSpawns.map(
+    (sp, i) => new Critter(animalOf(sp.kind), sp.x, sp.y, sp.home, 5000 + i * 53, sp.kind === 'chicken' ? 22 : 14),
+  );
+  const ducks = scene.duckSpawns.map(
+    (sp, i) => new Duck(assets.animals.duck, sp.x, sp.y, sp.home, 9000 + i * 71, 9),
+  );
 
   // --- debug / display state ------------------------------------------------
   let dayT = 0.79; // start at dusk so the lights read immediately
@@ -117,6 +142,17 @@ function start(): void {
       }
     }
 
+    for (const v of villagers) v.update(dt, scene.solids);
+    for (const a of animals) a.update(dt, scene.solids);
+    for (const d of ducks) d.update(dt, scene.solids);
+
+    // Chimneys, the forge and the campfire all drift smoke.
+    for (const sm of scene.smoke) {
+      if (sm.rate > 0 && Math.random() < dt * sm.rate) fx.smoke(sm.x, sm.y);
+    }
+    // Spray thrown off the mill wheel where the paddles hit the water.
+    if (Math.random() < dt * 14) fx.splash(scene.smoke[scene.smoke.length - 1].x, MILL.y - 10, 0.25);
+
     player.update(dt, input, camera.ix, camera.iy, scene.solids, fx, camera);
     player.updateBullets(dt, scene.solids, fx);
 
@@ -175,6 +211,9 @@ function start(): void {
       });
     }
     for (const s of slimes) items.push({ y: s.sortY, draw: () => s.draw(ctx, camX, camY) });
+    for (const v of villagers) items.push({ y: v.sortY, draw: () => v.draw(ctx, camX, camY) });
+    for (const a of animals) items.push({ y: a.sortY, draw: () => a.draw(ctx, camX, camY) });
+    for (const d of ducks) items.push({ y: d.sortY, draw: () => d.draw(ctx, camX, camY) });
     items.push({ y: player.y, draw: () => player.draw(ctx, camX, camY) });
     items.sort((a, b) => a.y - b.y);
 
@@ -243,7 +282,7 @@ function start(): void {
       paused: dayPaused,
       playerState: player.state,
       forced: player.forced,
-      entities: scene.decos.length + slimes.length + 1,
+      entities: scene.decos.length + slimes.length + villagers.length + animals.length + ducks.length + 1,
       particles: fx.list.length,
       showHelp,
     });

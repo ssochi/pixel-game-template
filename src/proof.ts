@@ -6,7 +6,7 @@
  * Open `/proof.html` while working on an asset.
  */
 import { bakeAll } from './art/assets';
-import type { Sheet } from './art/sheet';
+import { bakeSheet, type Sheet } from './art/sheet';
 import { drawText } from './engine/font';
 
 const ZOOM = 8;
@@ -43,6 +43,38 @@ function main(): void {
     }
     add('gun', assets.gun, [0, 1]);
     add('slime', assets.slime.idle.sheet, [0, 3]);
+  } else if (group === 'animals') {
+    const an = assets.animals;
+    add('cow idle', an.cow.idle.sheet, [0]);
+    add('cow walk', an.cow.walk.sheet, [1, 4]);
+    add('cow graze', an.cow.graze.sheet, [2]);
+    add('sheep', an.sheep.walk.sheet, [0, 3]);
+    add('pig', an.pig.walk.sheet, [0, 3]);
+    add('goat', an.goat.walk.sheet, [0]);
+    add('chicken', an.chicken.idle.sheet, [0]);
+    add('chick peck', an.chicken.graze.sheet, [1]);
+    add('duck', an.duck.idle.sheet, [0, 2]);
+  } else if (group === 'town') {
+    const bd = assets.buildings;
+    const sheetOf = (b: { buffer: import('./art/pixel').PixelBuffer; ax: number; ay: number }) =>
+      bakeSheet([b.buffer], b.ax, b.ay);
+    add('cottage a', sheetOf(bd.cottages[0]));
+    add('cottage b', sheetOf(bd.cottages[1]));
+    add('tavern', sheetOf(bd.tavern));
+    add('mill', sheetOf(bd.mill));
+    add('wheel', bd.waterWheel.sheet, [0, 2]);
+    add('haystack', bd.haystacks[0]);
+    add('scarecrow', bd.scarecrow);
+    add('stall', bd.stalls[0]);
+    add('cart', bd.cart);
+    add('sign', bd.signs.tavern);
+    add('wheat', bd.wheat[0]);
+    add('cow', assets.animals.cow.idle.sheet, [0]);
+    add('sheep', assets.animals.sheep.walk.sheet, [0]);
+    add('pig', assets.animals.pig.walk.sheet, [0]);
+    add('chicken', assets.animals.chicken.idle.sheet, [0]);
+    add('duck', assets.animals.duck.idle.sheet, [0]);
+    add('npc', assets.npcs[2].idle[0].sheet, [0]);
   } else {
     add('barrel', p.barrels[0]);
     add('crate', p.crates[0]);

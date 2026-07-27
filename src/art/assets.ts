@@ -1,11 +1,13 @@
 /** One bake pass for the entire asset set, plus a flat registry for the gallery. */
-import { bakeCharacter, bakeGun, bakeMuzzleFlash, HERO_SKIN, ROGUE_SKIN, type CharacterAnims } from './character';
+import { bakeAnimals, type AnimalAssets } from './animals';
+import { bakeBuildings, type BuildingAssets } from './buildings';
+import { bakeCharacter, bakeNpc, bakeGun, bakeMuzzleFlash, HERO_SKIN, NPC_SKINS, ROGUE_SKIN, type CharacterAnims } from './character';
 import { bakeSlime, type SlimeAnims } from './creatures';
 import { bakeNature, type NatureAssets } from './nature';
 import { bakeProps, type PropAssets } from './props';
 import { P } from './palette';
 import type { Clip, Sheet } from './sheet';
-import { clip } from './sheet';
+import { bakeSheet, clip } from './sheet';
 
 export interface Assets {
   hero: CharacterAnims;
@@ -15,6 +17,10 @@ export interface Assets {
   slime: SlimeAnims;
   nature: NatureAssets;
   props: PropAssets;
+  buildings: BuildingAssets;
+  animals: AnimalAssets;
+  /** One idle/walk set per townsfolk skin. */
+  npcs: CharacterAnims[];
   /** name -> clip, used by the asset gallery screen. */
   gallery: GalleryGroup[];
 }
@@ -50,6 +56,9 @@ export function bakeAll(): Assets {
   const slime = bakeSlime(P.leafLight);
   const nature = bakeNature();
   const props = bakeProps();
+  const buildings = bakeBuildings();
+  const animals = bakeAnimals();
+  const npcs = NPC_SKINS.map((s) => bakeNpc(s));
 
   const charEntries: GalleryEntry[] = [];
   for (const s of hero.sheets) {
@@ -131,6 +140,56 @@ export function bakeAll(): Assets {
       ],
     },
     {
+      title: 'buildings',
+      entries: [
+        ...buildings.cottages.map((b, i) => fromSheet(`cottage ${i + 1}`, bakeSheet([b.buffer], b.ax, b.ay))),
+        fromSheet('tavern', bakeSheet([buildings.tavern.buffer], buildings.tavern.ax, buildings.tavern.ay)),
+        fromSheet('inn', bakeSheet([buildings.inn.buffer], buildings.inn.ax, buildings.inn.ay)),
+        fromSheet('smithy', bakeSheet([buildings.smithy.buffer], buildings.smithy.ax, buildings.smithy.ay)),
+        fromSheet('shop', bakeSheet([buildings.shop.buffer], buildings.shop.ax, buildings.shop.ay)),
+        fromSheet('chapel', bakeSheet([buildings.chapel.buffer], buildings.chapel.ax, buildings.chapel.ay)),
+        fromSheet('mill', bakeSheet([buildings.mill.buffer], buildings.mill.ax, buildings.mill.ay)),
+        fromSheet('barn', bakeSheet([buildings.barn.buffer], buildings.barn.ax, buildings.barn.ay)),
+        { name: 'water wheel', clip: buildings.waterWheel },
+      ],
+    },
+    {
+      title: 'town dressing',
+      entries: [
+        ...Object.entries(buildings.signs).map(([k, sh]) => fromSheet(`sign ${k}`, sh)),
+        ...buildings.stalls.map((s, i) => fromSheet(`stall ${i + 1}`, s)),
+        fromSheet('cart', buildings.cart),
+        { name: 'lamppost', clip: buildings.lamppost },
+        ...buildings.haystacks.map((s, i) => fromSheet(`haystack ${i + 1}`, s)),
+        fromSheet('scarecrow', buildings.scarecrow),
+        ...buildings.wheat.map((s, i) => fromSheet(`wheat ${i + 1}`, s)),
+        ...buildings.cabbage.map((s, i) => fromSheet(`cabbage ${i + 1}`, s)),
+      ],
+    },
+    {
+      title: 'animals',
+      entries: [
+        { name: 'cow idle', clip: animals.cow.idle },
+        { name: 'cow walk', clip: animals.cow.walk },
+        { name: 'cow graze', clip: animals.cow.graze },
+        { name: 'pig walk', clip: animals.pig.walk },
+        { name: 'sheep walk', clip: animals.sheep.walk },
+        { name: 'sheep graze', clip: animals.sheep.graze },
+        { name: 'goat walk', clip: animals.goat.walk },
+        { name: 'chicken idle', clip: animals.chicken.idle },
+        { name: 'chicken walk', clip: animals.chicken.walk },
+        { name: 'chicken peck', clip: animals.chicken.graze },
+        { name: 'duck idle', clip: animals.duck.idle },
+      ],
+    },
+    {
+      title: 'townsfolk',
+      entries: npcs.flatMap((n, i) => [
+        { name: `npc ${i + 1} idle`, clip: n.idle[0] },
+        { name: `npc ${i + 1} walk`, clip: n.walk[1] },
+      ]),
+    },
+    {
       title: 'light sources',
       entries: [
         { name: 'torch', clip: props.torch },
@@ -152,5 +211,5 @@ export function bakeAll(): Assets {
     },
   ];
 
-  return { hero, rogue, gun, muzzle, slime, nature, props, gallery };
+  return { hero, rogue, gun, muzzle, slime, nature, props, buildings, animals, npcs, gallery };
 }

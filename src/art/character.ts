@@ -9,7 +9,7 @@
  * Frame layout: 32x36, anchor at the feet (16, 30).
  */
 import { PixelBuffer, mix, parseArt, rgba, shade, type RGBA } from './pixel';
-import { P, R } from './palette';
+import { P, R, type Ramp } from './palette';
 import { bakeSheet, clip, type Clip, type Sheet } from './sheet';
 
 export const FRAME_W = 32;
@@ -77,6 +77,50 @@ export const ROGUE_SKIN: Skin = {
   hooded: true,
   cape: true,
 };
+
+/**
+ * Townsfolk. Same rig, different cloth — which is the point of building the
+ * character as a parametric skeleton in the first place: a new villager costs
+ * eight colours, not a sprite sheet.
+ */
+function villager(
+  coat: Ramp,
+  pants: Ramp,
+  accent: Ramp,
+  hair: Ramp,
+  opts: Partial<Skin> = {},
+): Skin {
+  return {
+    skin: P.skin,
+    skinDark: P.skinMid,
+    hair: hair[2],
+    hairDark: hair[0],
+    coat: coat[2],
+    coatLight: coat[3],
+    coatDark: coat[1],
+    accent: accent[2],
+    accentDark: accent[1],
+    pants: pants[2],
+    pantsDark: pants[1],
+    boot: R.wood[1],
+    bootDark: R.wood[0],
+    ink: P.ink,
+    ...opts,
+  };
+}
+
+export const NPC_SKINS: Skin[] = [
+  villager(R.red, R.night, R.gold, R.hair), // innkeeper
+  villager(R.leaf, R.dirt, R.sand, R.wood), // farmer
+  villager(R.purple, R.night, R.gold, R.night), // merchant
+  villager(R.metal, R.metal, R.red, R.hair, { cape: true }), // guard
+  villager(R.sand, R.wood, R.red, R.wood), // baker
+  villager(R.teal, R.dirt, R.paper, R.hair), // fisher
+  villager(R.paper, R.purple, R.teal, R.gold), // townswoman
+  villager(R.dirt, R.night, R.leaf, R.hair, { scarf: true }), // labourer
+  villager(R.night, R.night, R.metal, R.night, { hooded: true }), // stranger
+  villager(R.gold, R.wood, R.red, R.hair, { scarf: true }), // herald
+];
 
 export interface Pose {
   bob: number;
@@ -513,6 +557,28 @@ export interface CharacterAnims {
   death: Clip[];
   /** Every baked sheet, for the asset gallery. */
   sheets: { name: string; dir: Dir; sheet: Sheet }[];
+}
+
+/**
+ * Villagers only ever idle and walk, so baking their run/attack/death sets
+ * would triple the boot cost of a crowded town for frames nothing plays.
+ * Those slots alias the walk clips.
+ */
+export function bakeNpc(s: Skin): CharacterAnims {
+  const dirs: Dir[] = [0, 1, 2];
+  const idleP = idlePoses();
+  const walkP = walkPoses(8, 1);
+  const idle: Clip[] = [];
+  const walk: Clip[] = [];
+  const sheets: { name: string; dir: Dir; sheet: Sheet }[] = [];
+  for (const d of dirs) {
+    const si = bake(s, d, idleP, 0.6);
+    const sw = bake(s, d, walkP, 1.4);
+    idle[d] = clip(si, range(si.count), 6);
+    walk[d] = clip(sw, range(sw.count), 12);
+    sheets.push({ name: 'idle', dir: d, sheet: si }, { name: 'walk', dir: d, sheet: sw });
+  }
+  return { idle, walk, run: walk, attack: idle, death: idle, sheets };
 }
 
 export function bakeCharacter(s: Skin): CharacterAnims {

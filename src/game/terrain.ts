@@ -3,23 +3,26 @@
  *
  * A signed distance to the river centreline drives the water mask, the sandy
  * bank, the grass falloff and the collision test, so the art and the gameplay
- * can never disagree about where the water is.
+ * can never disagree about where the water is. The town's roads, market square
+ * and field plots are laid out here too, so the ground painting and the prop
+ * placement in `scene.ts` read from the same numbers.
  */
 import { R } from '../art/palette';
 import { PixelBuffer, bayer, rampBand, shade, type RGBA } from '../art/pixel';
 import { RNG, fbm, hash2 } from '../engine/rng';
 
-export const WORLD_W = 960;
-export const WORLD_H = 640;
+export const WORLD_W = 1440;
+export const WORLD_H = 960;
 
-export const PLAZA = { x0: 96, y0: 96, x1: 356, y1: 320 };
+/** Cobbled market square at the centre of town. */
+export const PLAZA = { x0: 430, y0: 400, x1: 700, y1: 610 };
 
 export function riverCenter(y: number): number {
-  return 470 + Math.sin(y * 0.0125) * 96 + Math.sin(y * 0.031 + 1.4) * 26 + Math.sin(y * 0.007) * 40;
+  return 1140 + Math.sin(y * 0.0105) * 74 + Math.sin(y * 0.026 + 1.4) * 22 + Math.sin(y * 0.006) * 34;
 }
 
 export function riverHalf(y: number): number {
-  return 40 + Math.sin(y * 0.019 + 0.7) * 9 + Math.sin(y * 0.005) * 7;
+  return 42 + Math.sin(y * 0.017 + 0.7) * 9 + Math.sin(y * 0.004) * 7;
 }
 
 /** Negative inside the water, positive on land; roughly in pixels. */
@@ -29,18 +32,22 @@ export function riverSDF(x: number, y: number): number {
 
 /** Bridge deck (world px) — the only place the river can be crossed. */
 export const BRIDGE = (() => {
-  const y0 = 292;
-  const y1 = 324;
+  const y0 = 486;
+  const y1 = 522;
   let maxC = 0;
   let maxH = 0;
+  let minC = 1e9;
   for (let y = y0; y <= y1; y++) {
     maxC = Math.max(maxC, riverCenter(y));
     maxH = Math.max(maxH, riverHalf(y));
+    minC = Math.min(minC, riverCenter(y));
   }
-  let minC = 1e9;
-  for (let y = y0; y <= y1; y++) minC = Math.min(minC, riverCenter(y));
-  return { y0, y1, x0: minC - maxH - 26, x1: maxC + maxH + 26, cy: (y0 + y1) / 2 };
+  return { y0, y1, x0: minC - maxH - 28, x1: maxC + maxH + 28, cy: (y0 + y1) / 2 };
 })();
+
+/** Where the mill sits: on the west bank, its wheel dipping into the current. */
+export const MILL = { x: 0, y: 760 };
+MILL.x = riverCenter(MILL.y) - riverHalf(MILL.y) - 34;
 
 export function isWater(x: number, y: number): boolean {
   return riverSDF(x, y) < 0;
@@ -50,39 +57,75 @@ export function onBridge(x: number, y: number): boolean {
   return y > BRIDGE.y0 && y < BRIDGE.y1 && x > BRIDGE.x0 && x < BRIDGE.x1;
 }
 
-/** Movement blocker test used by the player and creatures. */
+/** Movement blocker test used by the player, NPCs and animals. */
 export function blocksMovement(x: number, y: number): boolean {
   if (x < 8 || y < 8 || x > WORLD_W - 8 || y > WORLD_H - 8) return true;
   if (isWater(x, y) && !onBridge(x, y)) return true;
   return false;
 }
 
-const PATH: [number, number][] = [
-  [150, 210],
-  [250, 240],
-  [330, 300],
-  [420, 308],
-  [560, 308],
-  [700, 300],
-  [800, 250],
-  [880, 180],
+// --- town layout -----------------------------------------------------------
+
+export interface Road {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  w: number;
+}
+
+/**
+ * The street network. A single main street running north-south with a market
+ * square on it, a high street heading east to the bridge, and lanes serving
+ * the outlying farms. Buildings are placed along these in `scene.ts`.
+ */
+export const ROADS: Road[] = [
+  { x0: 565, y0: 90, x1: 565, y1: 900, w: 30 }, // main street
+  { x0: 300, y0: 504, x1: 1000, y1: 504, w: 28 }, // high street to the bridge
+  { x0: 300, y0: 504, x1: 230, y1: 300, w: 20 }, // lane to the north farm
+  { x0: 300, y0: 504, x1: 250, y1: 740, w: 20 }, // lane to the south farm
+  { x0: 565, y0: 700, x1: 900, y1: 760, w: 20 }, // mill lane
+  { x0: 565, y0: 240, x1: 860, y1: 200, w: 20 }, // chapel lane
 ];
 
-function distToPath(x: number, y: number): number {
+export function distToRoad(x: number, y: number): number {
   let best = 1e9;
-  for (let i = 0; i < PATH.length - 1; i++) {
-    const [x0, y0] = PATH[i];
-    const [x1, y1] = PATH[i + 1];
-    const vx = x1 - x0;
-    const vy = y1 - y0;
+  for (const r of ROADS) {
+    const vx = r.x1 - r.x0;
+    const vy = r.y1 - r.y0;
     const len2 = vx * vx + vy * vy;
-    let t = ((x - x0) * vx + (y - y0) * vy) / len2;
+    let t = ((x - r.x0) * vx + (y - r.y0) * vy) / len2;
     t = t < 0 ? 0 : t > 1 ? 1 : t;
-    const d = Math.hypot(x - (x0 + vx * t), y - (y0 + vy * t));
+    const d = Math.hypot(x - (r.x0 + vx * t), y - (r.y0 + vy * t)) - r.w / 2;
     if (d < best) best = d;
   }
   return best;
 }
+
+export interface Field {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** Furrows run along this axis. */
+  vertical: boolean;
+  crop: 'wheat' | 'cabbage' | 'fallow';
+}
+
+export const FIELDS: Field[] = [
+  { x0: 120, y0: 180, x1: 330, y1: 300, vertical: false, crop: 'wheat' },
+  { x0: 120, y0: 620, x1: 300, y1: 740, vertical: true, crop: 'cabbage' },
+  { x0: 330, y0: 640, x1: 470, y1: 760, vertical: false, crop: 'wheat' },
+  { x0: 140, y0: 330, x1: 280, y1: 430, vertical: true, crop: 'fallow' },
+];
+
+export function fieldAt(x: number, y: number): Field | null {
+  for (const f of FIELDS) if (x > f.x0 && x < f.x1 && y > f.y0 && y < f.y1) return f;
+  return null;
+}
+
+/** Fenced paddock where the livestock graze. */
+export const PADDOCK = { x0: 300, y0: 780, x1: 520, y1: 900 };
 
 function inPlaza(x: number, y: number): boolean {
   return x > PLAZA.x0 && x < PLAZA.x1 && y > PLAZA.y0 && y < PLAZA.y1;
@@ -184,25 +227,25 @@ function cobble(x: number, y: number): RGBA {
   let row = 0;
   let rowTop = 0;
   for (;;) {
-    const h = 7 + Math.floor(hash2(row, 77) * 5);
+    const h = 5 + Math.floor(hash2(row, 77) * 4);
     if (y < rowTop + h) break;
     rowTop += h;
     row++;
   }
-  const rowH = 7 + Math.floor(hash2(row, 77) * 5);
+  const rowH = 5 + Math.floor(hash2(row, 77) * 4);
   const ly = y - rowTop;
 
   // Columns of varying width, offset per row.
-  const off = Math.floor(hash2(row, 31) * 16);
+  const off = Math.floor(hash2(row, 31) * 12);
   let col = 0;
   let colLeft = -off;
   for (;;) {
-    const w = 11 + Math.floor(hash2(col, row * 7 + 5) * 8);
+    const w = 8 + Math.floor(hash2(col, row * 7 + 5) * 6);
     if (x < colLeft + w) break;
     colLeft += w;
     col++;
   }
-  const colW = 11 + Math.floor(hash2(col, row * 7 + 5) * 8);
+  const colW = 8 + Math.floor(hash2(col, row * 7 + 5) * 6);
   const lx = x - colLeft;
 
   const mortar = lx <= 0 || ly <= 0;
@@ -234,13 +277,14 @@ export function bakeGround(): HTMLCanvasElement {
     const d = riverSDF(x, y);
     return d >= 0 && d < 12 + fbm(x * 0.04, y * 0.04, 2) * 12;
   };
-  const isPath = (x: number, y: number): boolean =>
-    !inPlaza(x, y) && distToPath(x, y) < 12 + fbm(x * 0.055, y * 0.055, 2) * 9;
+  const isRoad = (x: number, y: number): boolean =>
+    !inPlaza(x, y) && distToRoad(x, y) < 1 + fbm(x * 0.055, y * 0.055, 2) * 7;
 
   // --- pass 1: flat base tones, dithered between two ramp steps -------------
   for (let y = 0; y < WORLD_H; y++) {
     for (let x = 0; x < WORLD_W; x++) {
       const d = riverSDF(x, y);
+      const field = fieldAt(x, y);
       let c: RGBA;
       if (d < 0) {
         // Riverbed — visible through the shallows at the edges.
@@ -255,8 +299,21 @@ export function bakeGround(): HTMLCanvasElement {
       } else if (isSand(x, y)) {
         // Wet sand right at the waterline, dry sand further up.
         c = d < 3 ? R.sand[2] : rampBand(R.sand, 0.5 + fbm(x * 0.05, y * 0.05, 2) * 0.45, x, y);
-      } else if (isPath(x, y)) {
+      } else if (isRoad(x, y)) {
         c = rampBand(R.dirt, 0.35 + fbm(x * 0.05, y * 0.05, 2) * 0.35, x, y);
+      } else if (field) {
+        // Ploughed earth: alternating furrow ridges, with the sunlit side of
+        // each ridge one step up the ramp. The regular rhythm is the whole
+        // point — it is what reads as "worked land" from above.
+        const along = field.vertical ? x : y;
+        const phase = along % 7;
+        const base = 0.3 + fbm(x * 0.05, y * 0.05, 2) * 0.25;
+        c =
+          phase === 0
+            ? R.dirt[0]
+            : phase <= 2
+              ? rampBand(R.dirt, base + 0.22, x, y)
+              : rampBand(R.dirt, base, x, y);
       } else {
         // Broad, slow tonal drift only — two steps of the grass ramp. All the
         // detail comes from the clusters in pass 2.
@@ -269,9 +326,17 @@ export function bakeGround(): HTMLCanvasElement {
 
   // --- pass 2: texture clusters --------------------------------------------
   const onGrass = (x: number, y: number): boolean =>
-    x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H && riverSDF(x, y) >= 0 && !inPlaza(x, y) && !isSand(x, y) && !isPath(x, y);
+    x >= 0 &&
+    y >= 0 &&
+    x < WORLD_W &&
+    y < WORLD_H &&
+    riverSDF(x, y) >= 0 &&
+    !inPlaza(x, y) &&
+    !isSand(x, y) &&
+    !isRoad(x, y) &&
+    !fieldAt(x, y);
   const onDirt = (x: number, y: number): boolean =>
-    x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H && riverSDF(x, y) >= 0 && !inPlaza(x, y) && !isSand(x, y) && isPath(x, y);
+    x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H && riverSDF(x, y) >= 0 && !inPlaza(x, y) && !isSand(x, y) && isRoad(x, y);
   const onSand = (x: number, y: number): boolean =>
     x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H && riverSDF(x, y) >= 3 && isSand(x, y);
 
@@ -288,7 +353,7 @@ export function bakeGround(): HTMLCanvasElement {
 
   // --- pass 3: a few large-scale features ----------------------------------
   // Cracks in the plaza, and worn dirt patches where the grass thins out.
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 160; i++) {
     const x = rng.int(0, WORLD_W - 1);
     const y = rng.int(0, WORLD_H - 1);
     if (isWater(x, y)) continue;

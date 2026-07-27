@@ -1,6 +1,6 @@
 /** Chunky single-pixel particles: dust, sparks, splashes, blood, embers. */
 import type { RGBA } from '../art/pixel';
-import { P } from '../art/palette';
+import { P, R } from '../art/palette';
 
 export interface Particle {
   x: number;
@@ -119,6 +119,23 @@ export class Particles {
         colors: [P.blood, P.bloodDark],
       });
     }
+  }
+
+  /** Chimney and forge smoke: slow, rising, fading from warm grey to nothing. */
+  smoke(x: number, y: number): void {
+    this.spawn({
+      x: x + (Math.random() - 0.5) * 3,
+      y,
+      vx: (Math.random() - 0.5) * 4 + 3,
+      vy: -1,
+      vz: 9 + Math.random() * 6,
+      gravity: -2,
+      drag: 0.35,
+      life: 1.6 + Math.random() * 1.4,
+      maxLife: 3,
+      size: Math.random() < 0.5 ? 2 : 1,
+      colors: [R.night[3], R.stone[2], R.stone[3]],
+    });
   }
 
   ember(x: number, y: number): void {
