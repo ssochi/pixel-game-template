@@ -126,12 +126,15 @@ export function drawHotbar(ctx: CanvasRenderingContext2D, a: Assets, inv: Invent
     if (s.item) {
       const icon = iconFor(a, s.item);
       if (icon) {
-        // Icons vary in size; scale the big ones down into the slot.
-        const k = Math.min(1, 14 / Math.max(icon.fw, icon.fh));
+        // Scale oversized icons down, then centre the frame's bounding box on
+        // the slot centre. Passing (ax - fw/2, ay - fh/2) to drawFrame puts the
+        // box centre at the origin regardless of where the sheet's anchor is —
+        // anchors vary (feet, centre, corner), so anything else drifts.
+        const k = Math.min(1, 16 / Math.max(icon.fw, icon.fh));
         ctx.save();
-        ctx.translate(x + (slot - 2) / 2, y0 + (slot - 2) / 2 + 2);
+        ctx.translate(x + (slot - 2) / 2, y0 + (slot - 2) / 2);
         if (k !== 1) ctx.scale(k, k);
-        drawFrame(ctx, icon, 0, 0, icon.ay - icon.fh / 2 + (icon.fh * 0) + icon.fh / 2 - icon.ay + icon.fh / 2);
+        drawFrame(ctx, icon, 0, icon.ax - icon.fw / 2, icon.ay - icon.fh / 2);
         ctx.restore();
       }
       if (!ITEMS[s.item].tool && s.count > 1) {
@@ -186,11 +189,11 @@ export function drawShop(
     }
     const icon = iconFor(a, s.item);
     if (icon) {
-      const k = Math.min(1, 12 / Math.max(icon.fw, icon.fh));
+      const k = Math.min(1, 13 / Math.max(icon.fw, icon.fh));
       ctx.save();
-      ctx.translate(x + 12, ry + 7);
+      ctx.translate(x + 12, ry + 6);
       if (k !== 1) ctx.scale(k, k);
-      drawFrame(ctx, icon, 0, 0, icon.fh / 2);
+      drawFrame(ctx, icon, 0, icon.ax - icon.fw / 2, icon.ay - icon.fh / 2);
       ctx.restore();
     }
     const def = ITEMS[s.item];

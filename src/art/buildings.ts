@@ -157,20 +157,31 @@ function drawWindow(b: PixelBuffer, x: number, y: number, shutters: boolean, box
 }
 
 function drawDoor(b: PixelBuffer, x: number, y: number, w: number, h: number, canopy: boolean): void {
-  b.fillRect(x - w / 2 - 1, y - h - 1, w + 2, h + 1, R.wood[1]);
-  b.fillRect(x - w / 2, y - h, w, h, R.wood[2]);
-  for (let i = 0; i < w; i += 3) b.vline(x - w / 2 + i, y - h, y - 1, R.wood[1]);
-  b.hline(x - w / 2, x + w / 2 - 1, y - h, R.wood[3]);
-  b.hline(x - w / 2, x + w / 2 - 1, y - h + 3, R.metal[1]);
-  b.hline(x - w / 2, x + w / 2 - 1, y - 4, R.metal[1]);
-  b.set(x + w / 2 - 2, y - Math.round(h / 2), R.gold[3]);
-  b.fillRect(x - w / 2 - 2, y, w + 4, 1, R.stone[2]);
-  b.fillRect(x - w / 2 - 1, y - 1, w + 2, 1, R.stone[3]);
+  // The old door was 10px of R.wood on a facade whose timber frame is the same
+  // R.wood ramp — it camouflaged completely and every house read as doorless.
+  // A door has to be the darkest thing on the wall: a recessed opening first,
+  // then a warm reddish leaf inside it, one step, one knob.
+  const x0 = Math.round(x - w / 2);
+  // Recessed opening: a hard dark reveal all around the leaf.
+  b.fillRect(x0 - 2, y - h - 2, w + 4, h + 2, R.night[1]);
+  // The leaf itself, on the dirt ramp — redder than any timber on the wall.
+  b.fillRect(x0, y - h, w, h, R.dirt[2]);
+  for (let i = 2; i < w; i += 3) b.vline(x0 + i, y - h + 1, y - 1, R.dirt[1]);
+  b.hline(x0, x0 + w - 1, y - h, R.dirt[3]);
+  // Iron hinge bands.
+  b.hline(x0, x0 + w - 1, y - h + 3, R.metal[1]);
+  b.hline(x0, x0 + w - 1, y - 4, R.metal[1]);
+  // Knob: two pixels so it survives at 1x.
+  b.fillRect(x0 + w - 3, y - Math.round(h / 2) - 1, 2, 2, R.gold[4]);
+  // Stone threshold, a step wider than the opening.
+  b.fillRect(x0 - 3, y, w + 6, 2, R.stone[2]);
+  b.hline(x0 - 3, x0 + w + 2, y, R.stone[3]);
   if (canopy) {
-    // A little pitched hood over the doorway, on two brackets.
-    const cw = w + 8;
-    b.fillRect(x - cw / 2, y - h - 5, cw, 3, R.wood[1]);
-    b.hline(x - cw / 2, x + cw / 2 - 1, y - h - 5, R.wood[3]);
+    // A pitched hood over the doorway, on two brackets.
+    const cw = w + 10;
+    b.fillRect(x - cw / 2, y - h - 6, cw, 3, R.wood[1]);
+    b.hline(x - cw / 2, x + cw / 2 - 1, y - h - 6, R.wood[3]);
+    b.hline(x - cw / 2 + 1, x + cw / 2 - 2, y - h - 3, R.night[1]);
     b.set(x - cw / 2 + 1, y - h - 2, R.wood[1]);
     b.set(x + cw / 2 - 2, y - h - 2, R.wood[1]);
   }
@@ -284,14 +295,18 @@ export function building(opts: BuildingOpts): Building {
     for (let i = 0; i < windows; i++) {
       const t = (i + 1) / (windows + 1);
       const wxp = Math.round(cx - half + t * half * 2);
-      if (door !== 'none' && wy > baseY - wallH * 0.55 && Math.abs(wxp - cx) < 10) continue;
+      if (door !== 'none' && wy > baseY - wallH * 0.55 && Math.abs(wxp - cx) < 13) continue;
       drawWindow(b, wxp, wy, rng.chance(0.6), rng.chance(0.45));
       winList.push({ x: wxp - cx, y: wy - baseY });
     }
   }
   if (door !== 'none') {
     const dx = door === 'center' ? cx : door === 'left' ? cx - lowerHalf + 10 : cx + lowerHalf - 10;
-    drawDoor(b, dx, baseY, 10, Math.min(16, baseY - jettyY - 2), rng.chance(0.5));
+    // Never squatter than 15px — a jettied ground floor used to squeeze the
+    // door to a crate-sized stub; tucking it a little under the overhang is
+    // fine, being knee-high is not. Width 12: still narrower than the player,
+    // but wide enough to read as somewhere a person goes.
+    drawDoor(b, dx, baseY, 12, Math.max(15, Math.min(19, baseY - jettyY - 2)), true);
   }
 
   // --- roof ---------------------------------------------------------------

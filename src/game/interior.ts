@@ -102,9 +102,22 @@ export class RoomBuilder {
       buf.fillRect(sx, WALL_H, 6, spec.h - WALL_H, R.night[1]);
       buf.fillRect(sx === 0 ? 5 : spec.w - 6, WALL_H, 1, spec.h - WALL_H, R.night[2]);
     }
-    // Bottom wall: a thin lip so the room reads as enclosed.
+    // Bottom wall: a thin lip so the room reads as enclosed — with the doorway
+    // you came in through cut into it. The first version instead stood a whole
+    // door sprite in the middle of the floor, always drawn on top; the player
+    // spawned half-hidden behind it and the thing read as furniture, not exit.
     buf.fillRect(0, spec.h - 5, spec.w, 5, R.night[1]);
     buf.hline(0, spec.w - 1, spec.h - 5, R.night[2]);
+    const dw = 24;
+    const dx = Math.round(spec.w / 2 - dw / 2);
+    // The opening: floor runs out through the gap.
+    buf.fillRect(dx, spec.h - 5, dw, 5, R.wood[1]);
+    buf.hline(dx, dx + dw - 1, spec.h - 5, R.wood[2]);
+    // Door jambs on either side of the gap.
+    for (const jx of [dx - 2, dx + dw]) {
+      buf.fillRect(jx, spec.h - 6, 2, 6, R.wood[2]);
+      buf.fillRect(jx, spec.h - 6, 2, 1, R.wood[3]);
+    }
     // The wall's contact shadow on the floor. A hard first line then a short
     // falloff — this is what makes the floor read as receding away from the
     // wall rather than as more wall.
@@ -132,9 +145,9 @@ export class RoomBuilder {
 
     this.furnish(room, kind, rng);
 
-    // Doorway back out, drawn on the bottom wall, plus its mat.
+    // The mat just inside the doorway. The doorway itself is part of the
+    // bottom wall, baked into the ground bitmap above.
     this.add(room, this.a.interiors.mat, room.w / 2, room.h - 8, { layer: 'ground' });
-    this.add(room, this.a.interiors.innerDoor, room.w / 2, room.h - 2, { sortY: room.h + 40 });
 
     room.decos.sort((p, q) => p.sortY - q.sortY);
     return room;

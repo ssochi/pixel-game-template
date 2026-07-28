@@ -6,6 +6,7 @@ import { bakeSlime, type SlimeAnims } from './creatures';
 import { bakeEmotes, type EmoteAssets } from './emote';
 import { bakeFarm, type FarmAssets } from './farm';
 import { bakeFishing, type FishingAssets } from './fishing';
+import { bakeIcons } from './icons';
 import { bakeInteriors, type InteriorAssets } from './interiors';
 import { bakeNature, type NatureAssets } from './nature';
 import { bakeProps, type PropAssets } from './props';
@@ -29,6 +30,8 @@ export interface Assets {
   interiors: InteriorAssets;
   farm: FarmAssets;
   fishing: FishingAssets;
+  /** Hand-drawn 12px inventory icons, centre-anchored. */
+  icons: Record<string, Sheet>;
   /** name -> clip, used by the asset gallery screen. */
   gallery: GalleryGroup[];
 }
@@ -71,6 +74,7 @@ export function bakeAll(): Assets {
   const interiors = bakeInteriors();
   const farm = bakeFarm();
   const fishing = bakeFishing();
+  const icons = bakeIcons();
 
   const charEntries: GalleryEntry[] = [];
   for (const s of hero.sheets) {
@@ -276,6 +280,7 @@ export function bakeAll(): Assets {
     interiors,
     farm,
     fishing,
+    icons,
     gallery,
   };
 }

@@ -161,27 +161,9 @@ export function iconFor(a: Assets, id: string): Sheet | null {
   const def = ITEMS[id];
   if (!def) return null;
   if (id === 'rod') return a.fishing.rod;
-  if (a.fishing.fish[id]) return a.fishing.fish[id];
   if (def.tool) return a.farm.tools[id] ?? null;
   if (def.use === 'plant') return def.crop ? a.farm.seeds[def.crop as CropKind] : a.farm.tools.seeds;
-  switch (id) {
-    case 'turnip':
-      return a.farm.crops.turnip[3];
-    case 'pumpkin':
-      return a.farm.crops.pumpkin[3];
-    case 'wheat':
-      return a.farm.crops.wheat[3];
-    case 'wood':
-      return a.nature.log;
-    case 'stone':
-      return a.nature.rocks[0];
-    case 'fibre':
-      return a.nature.grass[0].sheet;
-    case 'mushroom':
-      return a.nature.mushrooms[0];
-    case 'flower':
-      return a.nature.flowers[0].sheet;
-    default:
-      return null;
-  }
+  // Everything stackable has a purpose-drawn icon. World sprites scaled into a
+  // slot were unreadable — a 35px fish at 40% is a smear, not a pike.
+  return a.icons[id] ?? null;
 }
