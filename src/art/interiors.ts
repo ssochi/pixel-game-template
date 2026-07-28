@@ -164,29 +164,49 @@ export function floorPatches(
   const rng = new RNG(seed * 131 + 7);
   const count = kind === 'plank' ? 3 : 4;
   for (let i = 0; i < count; i++) {
-    const pw = kind === 'plank' ? rng.int(28, 62) : rng.int(11, 24);
+    if (kind !== 'plank') {
+      // Masonry has no "next board along" to swap out, and a rectangle laid
+      // over irregular flagstones reads as a hole in the floor rather than as
+      // a repair. What masonry does have is areas rubbed lighter and areas
+      // gone dark with damp, so those get a soft-edged patch instead.
+      const rx = rng.int(9, 17);
+      const ry = rng.int(6, 11);
+      const px = x0 + rng.int(rx + 2, Math.max(rx + 3, w - rx - 2));
+      const py = y0 + rng.int(ry + 2, Math.max(ry + 3, h - ry - 2));
+      const dir = rng.chance(0.4) ? 1 : -1;
+      for (let y = py - ry; y <= py + ry; y++) {
+        for (let x = px - rx; x <= px + rx; x++) {
+          if (x < x0 || y < y0 || x >= x0 + w || y >= y0 + h) continue;
+          const d = ((x - px) / rx) ** 2 + ((y - py) / ry) ** 2;
+          if (d > 1) continue;
+          const cover = (1 - d) * (0.55 + fbm(x * 0.12 + i * 9, y * 0.17, 2) * 1.0);
+          if (cover < 0.3) continue;
+          if (cover < 0.55 && bayer(x, y) > (cover - 0.3) / 0.25) continue;
+          b.set(x, y, shade(b.get(x, y), dir * 0.2));
+        }
+      }
+      continue;
+    }
+    const pw = rng.int(28, 62);
     const px = x0 + rng.int(8, Math.max(9, w - pw - 8));
-    const ph = kind === 'plank' ? 10 : rng.int(9, 14);
+    const ph = 10;
     // A patch board has to sit *on* the board grid, or it reads as a stain.
-    const py =
-      kind === 'plank'
-        ? y0 + Math.floor(rng.int(0, Math.max(1, h - 14)) / 10) * 10
-        : y0 + rng.int(0, Math.max(1, h - ph));
-    const dir = rng.chance(0.4) ? 1 : -1;
+    const py = y0 + Math.floor(rng.int(0, Math.max(1, h - 14)) / 10) * 10;
+    // Boards only ever go *darker*. A board a step lighter than its neighbours
+    // reads as a highlight lying on the floor, not as different timber — the
+    // room is lit from lamps overhead, so nothing down there gets brighter.
     for (let y = py; y < py + ph; y++) {
       for (let x = px; x < px + pw; x++) {
         if (x < x0 || y < y0 || x >= x0 + w || y >= y0 + h) continue;
-        b.set(x, y, shade(b.get(x, y), dir * 0.2));
+        b.set(x, y, shade(b.get(x, y), -0.2));
       }
     }
-    if (kind === 'plank') {
-      // The butt joints at each end. They are what say "this is a different
-      // plank" rather than "this bit of the floor is darker".
-      for (const jx of [px, px + pw - 1]) {
-        for (let y = py + 1; y < py + ph - 1; y++) {
-          if (jx < x0 || jx >= x0 + w || y < y0 || y >= y0 + h) continue;
-          b.set(jx, y, R.wood[0]);
-        }
+    // The butt joints at each end. They are what say "this is a different
+    // plank" rather than "this bit of the floor is darker".
+    for (const jx of [px, px + pw - 1]) {
+      for (let y = py + 1; y < py + ph - 1; y++) {
+        if (jx < x0 || jx >= x0 + w || y < y0 || y >= y0 + h) continue;
+        b.set(jx, y, R.wood[0]);
       }
     }
   }
@@ -222,7 +242,7 @@ export function wearPath(b: PixelBuffer, pts: readonly (readonly [number, number
           // is rule 5's ordered dither: darken a fraction of the pixels on the
           // Bayer grid, densest along the centre line, thinning to nothing at
           // the edges so the track has no boundary to notice.
-          const cover = 0.55 * (1 - d * d) * (0.7 + fbm(x * 0.1, y * 0.14, 2) * 0.6);
+          const cover = 0.34 * (1 - d * d) * (0.7 + fbm(x * 0.1, y * 0.14, 2) * 0.6);
           if (bayer(x, y) > cover) continue;
           b.set(x, y, shade(b.get(x, y), -0.25));
         }
@@ -244,11 +264,16 @@ export function floorStain(b: PixelBuffer, cx: number, cy: number, rx: number, r
       const dy = (y - cy) / ry;
       const d = dx * dx + dy * dy;
       if (d > 1) continue;
-      // Rule 5, applied to a stain: a flat plateau where the soot is thick,
-      // and dithering *only* in the band where it thins out. Dithering the
-      // whole ellipse turns it into a patch of screen-door mesh.
-      const cover = (1 - d) * (0.5 + fbm(x * 0.14, y * 0.2, 2) * 1.1);
-      if (cover < 0.62 && bayer(x, y) > cover) continue;
+      // Rule 5, applied to a stain: a flat plateau where the soot is thick and
+      // dithering *only* in the narrow band where it thins out. Dithering the
+      // whole ellipse turns it into a patch of screen-door mesh — which on a
+      // flagstone floor is the most conspicuous thing in the room.
+      // The noise has to *dominate* the radial falloff, or the solid core comes
+      // out as a smooth lozenge with a dotted halo round it — which reads as a
+      // hole in the floorboards rather than as soot.
+      const cover = (1 - d * 0.85) * (0.2 + fbm(x * 0.15, y * 0.21, 2) * 1.5);
+      if (cover < 0.28) continue;
+      if (cover < 0.78 && bayer(x, y) > (cover - 0.28) / 0.5) continue;
       b.set(x, y, shade(b.get(x, y), dir * 0.25));
     }
   }
@@ -277,17 +302,33 @@ export function aisleBand(b: PixelBuffer, cx: number, y0: number, y1: number, ha
  * own colours are dithered over the top in the same lattice as the glass.
  */
 export function glassSpill(b: PixelBuffer, cx: number, cy: number, rx: number, ry: number): void {
-  const tints: Ramp[] = [R.teal, R.red, R.gold, R.purple];
+  const tints: Ramp[] = [R.gold, R.teal, R.red, R.purple];
   for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++) {
     for (let x = Math.floor(cx - rx); x <= Math.ceil(cx + rx); x++) {
       const dx = (x - cx) / rx;
       const dy = (y - cy) / ry;
       const d = dx * dx + dy * dy;
       if (d > 1) continue;
+      // The light itself: the flags simply lift a step.
       b.set(x, y, shade(b.get(x, y), 0.25));
-      const cell = Math.floor((x - cx + 40) / 6) + Math.floor((y - cy + 40) / 7) * 3;
-      const ramp = tints[((cell % tints.length) + tints.length) % tints.length];
-      if (hash2(x, y) > 0.42 + d * 0.5) b.set(x, y, ramp[1]);
+      // The colour arrives as whole projected panes — *solid* blocks with hard
+      // edges, one tint each. Two earlier attempts chose the tint per pixel
+      // and then dithered it, and both threw coloured confetti across the
+      // chancel: at 4x a 50% dither of a saturated hue is not a wash, it is a
+      // field of dots. Only the panes on the rim of the pool are dithered, and
+      // only to soften the boundary.
+      const cxi = Math.floor((x - cx + 60) / 6);
+      const cyi = Math.floor((y - cy + 60) / 4);
+      const ccx = (cxi - 10) * 6 + 3;
+      const ccy = (cyi - 15) * 4 + 2;
+      const cd = (ccx / rx) ** 2 + (ccy / ry) ** 2;
+      if (cd > 1.05) continue;
+      // Half the panes are left as bare lit stone. Leaded glass is mostly
+      // clear quarries with coloured lights set into it, and a solid mosaic
+      // of saturated blocks reads as a patchwork quilt lying on the floor.
+      if ((cxi + cyi) % 2 === 0) continue;
+      const ramp = tints[(((cxi + cyi * 3) % tints.length) + tints.length) % tints.length];
+      if (cd < 0.5 || bayer(x, y) < 1.05 - cd) b.set(x, y, ramp[2]);
     }
   }
 }
@@ -840,22 +881,32 @@ export function panRack(): PixelBuffer {
 /** A bunch of herbs hung up to dry — widest at the bottom, because it is upside down. */
 export function herbBundle(seed: number): PixelBuffer {
   const rng = new RNG(seed * 17 + 3);
-  const b = new PixelBuffer(13, 21);
-  b.vline(6, 0, 3, R.wood[1]);
-  b.fillRect(4, 4, 5, 3, R.wood[2]);
-  b.hline(4, 8, 4, R.wood[3]);
-  b.hline(4, 8, 6, R.wood[0]);
-  for (let i = 0; i < 7; i++) {
-    const dx = (i - 3) * 0.95;
-    const len = 9 + rng.int(0, 4);
-    const ramp: Ramp = i % 2 ? R.leaf : R.sand;
-    b.capsule(6, 6, 6 + dx, 6 + len, 1, ramp[1 + (i % 2)]);
-    b.set(Math.round(6 + dx), 6 + len, ramp[0]);
+  const b = new PixelBuffer(15, 21);
+  // Cord and a *narrow* corded neck. A fat block at the top pulls the eye off
+  // the leaves and the whole thing reads as a mallet.
+  b.vline(7, 0, 3, R.wood[1]);
+  b.hline(6, 8, 4, R.wood[3]);
+  b.hline(6, 8, 5, R.wood[1]);
+  for (let i = 0; i < 9; i++) {
+    const dx = (i - 4) * 0.5;
+    const len = 10 + rng.int(0, 5);
+    // Nearly parallel, only slightly splayed. Fanned wide from a single point
+    // the bunch comes out as a perfect triangle and reads as a small fir tree
+    // nailed to the wall. Mostly leaf, with two dried stems — an even
+    // alternation put a solid band of sand across the top instead.
+    const ramp: Ramp = i === 1 || i === 6 ? R.sand : R.leaf;
+    b.capsule(7 + dx * 0.4, 6, 7 + dx, 7 + len, 1, ramp[i % 2 ? 2 : 1]);
+    b.set(Math.round(7 + dx), 7 + len, ramp[0]);
   }
+  // The cord and the bound neck sit *over* the stems, so the eye reads "tied
+  // bunch" before it reads "green shape".
+  b.hline(5, 9, 5, R.wood[3]);
+  b.hline(5, 9, 6, R.wood[1]);
   // Lit tips on the key-light side only — never a rim all the way round.
   b.set(3, 12, R.leaf[3]);
   b.set(4, 15, R.leaf[3]);
-  b.set(8, 13, R.sand[3]);
+  b.set(5, 10, R.leaf[3]);
+  b.set(9, 13, R.sand[3]);
   b.selOutline();
   return b;
 }
@@ -992,8 +1043,14 @@ export function keyBoard(): PixelBuffer {
       // Keys in some holes, never all: a full board is a grid, and a grid is
       // texture rather than a thing.
       if ((r * 4 + c) % 3 !== 1) {
-        b.vline(x + 2, y + 1, y + 4, R.gold[2]);
-        b.set(x + 2, y + 1, R.gold[4]);
+        // Bow, shaft, bit. A shaft with one pixel kicked out at the foot —
+        // the first version — is an L, not a key: the ring at the top is what
+        // the eye actually recognises.
+        b.set(x + 1, y + 1, R.gold[4]);
+        b.set(x + 2, y + 1, R.gold[3]);
+        b.set(x + 1, y + 2, R.gold[3]);
+        b.set(x + 2, y + 2, R.gold[2]);
+        b.vline(x + 2, y + 3, y + 4, R.gold[2]);
         b.set(x + 3, y + 4, R.gold[3]);
       }
     }
@@ -1034,18 +1091,21 @@ export function dryGoods(seed: number): PixelBuffer {
 export function sconceClip(): Clip {
   const frames: PixelBuffer[] = [];
   for (let f = 0; f < 3; f++) {
-    const b = new PixelBuffer(11, 18);
-    // Bracket: back plate, arm, drip pan.
-    b.fillRect(0, 5, 2, 7, R.metal[1]);
-    b.set(1, 5, R.metal[3]);
-    b.hline(1, 5, 9, R.metal[2]);
-    b.set(3, 10, R.metal[1]);
-    b.ellipse(6, 10, 3, 1.4, R.metal[1]);
-    b.ellipse(6, 9, 3, 1.4, R.metal[3]);
+    const b = new PixelBuffer(12, 18);
+    // Bracket, in three unambiguous parts: a plate flat against the wall, an
+    // arm sloping up off it, and a saucer wider than the candle. The first
+    // version stacked two ellipses where the pan should be and the silhouette
+    // came out as a small white bird.
+    b.fillRect(0, 4, 2, 8, R.metal[1]);
+    b.set(0, 4, R.metal[3]);
+    b.set(1, 11, R.metal[0]);
+    b.line(2, 11, 6, 10, R.metal[2]);
+    b.hline(3, 10, 10, R.metal[3]);
+    b.hline(4, 9, 11, R.metal[1]);
     // Candle stub, wax running down one side only.
-    b.fillRect(5, 4, 3, 5, R.paper[3]);
-    b.vline(5, 4, 8, R.paper[4]);
-    b.vline(7, 4, 8, R.paper[2]);
+    b.fillRect(5, 4, 3, 6, R.paper[3]);
+    b.vline(5, 4, 9, R.paper[4]);
+    b.vline(7, 4, 9, R.paper[2]);
     b.set(8, 8, R.paper[3]);
     b.selOutline();
     // Flame after the outline, or it comes back ringed in ink.
@@ -1116,12 +1176,20 @@ export function harness(): PixelBuffer {
   }
   b.set(6, 7, R.wood[3]);
   b.set(8, 5, R.wood[3]);
-  // Straps trailing off it, with the buckles that say "tack" and not "wreath".
-  b.capsule(6, 17, 5, 24, 1.2, R.wood[1]);
-  b.capsule(14, 17, 15, 23, 1.2, R.wood[2]);
-  b.fillRect(3, 21, 4, 3, R.metal[2]);
-  b.hline(3, 6, 21, R.metal[4]);
-  b.set(15, 20, R.metal[3]);
+  // Straps trailing off it. They have to be *wide* and carry real buckles —
+  // 1px cords under a ring just read as the tail of a letter, and the whole
+  // thing comes out as an omega painted on the wall.
+  b.fillRect(4, 16, 3, 9, R.wood[1]);
+  b.vline(4, 16, 24, R.wood[2]);
+  b.hline(4, 6, 24, R.wood[0]);
+  b.fillRect(13, 16, 3, 8, R.wood[2]);
+  b.vline(15, 16, 23, R.wood[0]);
+  // Buckles: a bright frame with a dark tongue through it.
+  b.fillRect(3, 20, 5, 4, R.metal[3]);
+  b.fillRect(4, 21, 3, 2, R.wood[0]);
+  b.set(3, 20, R.metal[4]);
+  b.fillRect(12, 19, 5, 3, R.metal[2]);
+  b.hline(12, 16, 19, R.metal[4]);
   b.selOutline();
   return b;
 }
@@ -1168,13 +1236,15 @@ export function sillWindow(): PixelBuffer {
 // the objects that stop a table being a slab and a floor being a plane.
 // ---------------------------------------------------------------------------
 
+// The spoon has to touch the rim. Floated a pixel clear of it — the first
+// version — it stops being a spoon and becomes a speck of screen dirt.
 const BOWL_ART = [
-  '......ss..',
-  '.LLLLLs...',
-  'LppppppL..',
-  'LpPPPPpL..',
-  '.DwwwwD...',
-  '..DDDD....',
+  '.....s..',
+  '..LLLs..',
+  '.LppppL.',
+  '.LpPPpL.',
+  '.DwwwwD.',
+  '..DDDD..',
 ];
 
 const PLATES_ART = [
@@ -1207,13 +1277,16 @@ const CANDLE_ART = [
   '.SSS.',
 ];
 
+// Closed, and mostly cover. Drawn open at 11x6 the two pale pages read as a
+// pair of glowing tiles — at this size the *page edges* down one side are the
+// only detail that says "book" without also saying "domino".
 const BOOK_ART = [
-  '.pppp.pppp.',
-  'pPPPPnPPPPp',
-  'pPnnPnPnnPp',
-  'pPPPPnPPPPp',
-  'pPnnPnPnnPp',
-  '.rrrrrrrrr.',
+  '.rrrrrrrr.',
+  'rRRRRRRRRe',
+  'rRRRRRRRRP',
+  'rRRRRRRRRP',
+  'rRRRRRRRRe',
+  '.rrrrrrrr.',
 ];
 
 const SEWING_ART = [
@@ -1488,19 +1561,24 @@ export function candleStandClip(): Clip {
 export function pew(w: number): PixelBuffer {
   const b = new PixelBuffer(w, 23);
   b.groundShadow(w / 2, 21, w / 2 - 1, 2, 110);
-  // Back panel first (furthest from camera), then the seat over its foot.
-  b.fillRect(2, 0, w - 4, 7, R.wood[1]);
-  b.hline(2, w - 3, 0, R.wood[3]);
-  b.hline(2, w - 3, 3, R.wood[0]);
-  b.hline(2, w - 3, 4, R.wood[2]);
-  b.vline(2, 0, 6, R.wood[2]);
-  b.vline(w - 3, 0, 6, R.wood[0]);
+  // Back panel first (furthest from camera). It is *inset* at both ends and
+  // separated from the seat by a dark gap — without those two moves the back
+  // and the seat are two boards of the same width and the pew reads as a
+  // stack of planks rather than as something you sit in.
+  b.fillRect(5, 0, w - 10, 6, R.wood[1]);
+  b.hline(5, w - 6, 0, R.wood[3]);
+  b.hline(5, w - 6, 5, R.wood[0]);
+  b.vline(5, 0, 5, R.wood[2]);
+  b.vline(w - 6, 0, 5, R.wood[0]);
+  // Two uprights carrying it down to the seat.
+  for (const ux of [6, w - 8]) b.fillRect(ux, 5, 2, 4, R.wood[0]);
+  b.hline(0, w - 1, 6, R.night[1]);
   // Seat: top face, then its front edge.
   b.fillRect(0, 7, w, 5, R.wood[3]);
   b.hline(0, w - 1, 7, R.wood[4]);
   b.fillRect(0, 12, w, 3, R.wood[1]);
   b.hline(0, w - 1, 14, R.wood[0]);
-  // End standards and the stretcher between them.
+  // End standards, held clear of each other so daylight shows between them.
   for (const ex of [1, w - 4]) {
     b.fillRect(ex, 15, 3, 6, R.wood[1]);
     b.vline(ex, 15, 20, R.wood[2]);
@@ -1516,20 +1594,26 @@ export function pew(w: number): PixelBuffer {
 export function lectern(): PixelBuffer {
   const b = new PixelBuffer(24, 30);
   b.groundShadow(12, 28, 9, 2.2, 110);
-  // Splayed foot, shaft, then the sloped desk cantilevered off the top.
-  b.ellipse(12, 27, 8, 2.4, R.wood[1]);
-  b.ellipse(12, 26, 7, 2, R.wood[2]);
-  b.fillRect(10, 12, 4, 15, R.wood[1]);
-  b.vline(10, 12, 26, R.wood[2]);
-  b.vline(13, 12, 26, R.wood[0]);
-  b.ellipse(12, 18, 4, 1.6, R.wood[2]);
-  // Desk: a wedge, thick at the front lip and thin at the back.
-  for (let i = 0; i < 8; i++) {
-    b.hline(2 + i, 21 - i, 4 + i, R.wood[2]);
-  }
-  b.hline(2, 21, 4, R.wood[3]);
+  // A stepped foot, not a saucer: one wide plinth with a narrower block on it.
+  // The first version put a splayed disc under a bulging knop and the whole
+  // stem read as an hourglass.
+  b.fillRect(3, 25, 18, 3, R.wood[1]);
+  b.hline(3, 20, 25, R.wood[2]);
+  b.hline(3, 20, 27, R.wood[0]);
+  b.fillRect(6, 22, 12, 3, R.wood[2]);
+  b.hline(6, 17, 22, R.wood[3]);
+  // Shaft: a plain square column, lit down one edge only.
+  b.fillRect(9, 13, 6, 10, R.wood[1]);
+  b.vline(9, 13, 22, R.wood[2]);
+  b.vline(14, 13, 22, R.wood[0]);
+  b.fillRect(7, 17, 10, 2, R.wood[2]);
+  b.hline(7, 16, 17, R.wood[3]);
+  // Desk: a wedge, deep at the front lip and thin at the back, so the book on
+  // it is visibly tilted towards the reader.
+  for (let i = 0; i < 7; i++) b.hline(2 + i, 21 - i, 6 + i, R.wood[2]);
+  b.hline(2, 21, 6, R.wood[3]);
   b.fillRect(2, 11, 20, 2, R.wood[1]);
-  b.hline(2, 21, 13, R.wood[0]);
+  b.hline(2, 21, 12, R.wood[0]);
   // The open book on it, spine down the middle.
   b.fillRect(4, 5, 8, 6, R.paper[3]);
   b.fillRect(12, 5, 8, 6, R.paper[4]);
@@ -1728,8 +1812,8 @@ export function bakeInteriors(): InteriorAssets {
     flourChute: still(flourChute(), 11, 29),
     hayBales: [still(hayBale(5), 11, 15), still(hayBale(12), 11, 15)],
     trough: still(waterTrough(), 13, 15),
-    panRack: still(panRack(), 13, 19),
-    herbs: [still(herbBundle(2), 6, 20), still(herbBundle(9), 6, 20)],
+    panRack: still(panRack(), 14, 21),
+    herbs: [still(herbBundle(2), 7, 20), still(herbBundle(9), 7, 20)],
     bottleShelf: still(bottleShelf(44, 4), 22, 23),
     ledgerBoard: still(ledgerBoard(), 12, 20),
     horseshoes: still(horseshoes(), 12, 16),

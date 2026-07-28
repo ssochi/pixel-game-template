@@ -229,7 +229,11 @@ export class RoomBuilder {
         // The nave. Four centuries of feet down one line is the whole reason a
         // church floor doesn't read as a warehouse floor.
         aisleBand(buf, cx, WALL_H + 30, spec.h - 8, 15);
-        glassSpill(buf, cx, WALL_H + 16, 22, 9);
+        // The pool of light the window throws goes where a rug used to be. A
+        // purple hearth-rug under a pulpit was the chapel's most domestic
+        // object; a lozenge of coloured light is the same shape doing the
+        // opposite job.
+        glassSpill(buf, cx, WALL_H + 40, 27, 13);
         break;
       case 'mill':
         wearPath(buf, [door, [cx - 16, WALL_H + 82], [96, WALL_H + 66]], 7);
@@ -313,21 +317,26 @@ export class RoomBuilder {
         this.add(room, I.logPile, 88, wallY + 26, { solid: 9 });
         // Tables with chairs, on a rug, each laid with something.
         this.add(room, I.rugs[0], 96, room.h - 56, { layer: 'ground' });
+        // Both tables are held clear of the strip of floor directly above the
+        // doorway. One of them used to sit 20px in front of the mat, so the
+        // very first thing the player did on entering was walk into it.
         for (const [tx, ty] of [
-          [80, room.h - 66],
-          [150, room.h - 44],
+          [78, room.h - 68],
+          [200, room.h - 44],
         ] as [number, number][]) {
           this.add(room, p.table, tx, ty, { solid: 13 });
           this.add(room, p.chairL, tx - 26, ty + 2, { solid: 5 });
           this.add(room, p.chairR, tx + 26, ty + 2, { solid: 5, flip: true });
         }
-        this.add(room, I.bowl, 74, room.h - 78, { sortY: room.h - 65 });
-        this.add(room, I.bread, 88, room.h - 78, { sortY: room.h - 65 });
-        this.add(room, I.mug, 142, room.h - 56, { sortY: room.h - 43 });
-        this.add(room, I.plates, 156, room.h - 56, { sortY: room.h - 43 });
-        // The quiet corner: a keg somebody rolled out and never put back.
-        this.add(room, I.keg, 40, room.h - 40, { solid: 8 });
+        this.add(room, I.bowl, 72, room.h - 80, { sortY: room.h - 67 });
+        this.add(room, I.bread, 86, room.h - 80, { sortY: room.h - 67 });
+        this.add(room, I.mug, 192, room.h - 56, { sortY: room.h - 43 });
+        this.add(room, I.plates, 208, room.h - 56, { sortY: room.h - 43 });
+        // The quiet corner opposite: a keg somebody rolled out and never put
+        // back, and a stool pulled up to it.
+        this.add(room, I.keg, 40, room.h - 44, { solid: 8 });
         this.add(room, I.stool, 66, room.h - 32, { solid: 5 });
+        this.add(room, I.keg, 262, room.h - 34, { solid: 8 });
         this.add(room, I.paintings[0], 112, wallY - 12, { sortY: 0 });
         room.npcs.push({ x: room.w - 74, y: wallY + 26, skin: 0, role: 'innkeeper', cast: 'orin' });
         room.npcs.push({ x: 106, y: room.h - 70, skin: 7, role: 'drinker' });
@@ -347,8 +356,11 @@ export class RoomBuilder {
         // goods above waist height has nothing to walk around.
         this.add(room, I.sackStack, 46, wallY + 46, { solid: 11 });
         this.add(room, I.openCrate, 98, wallY + 48, { solid: 9 });
-        this.add(room, p.barrels[0], 124, wallY + 52, { solid: 8 });
+        // Off the door-to-counter diagonal. Parked on the centre line it was
+        // the first thing the player walked into on the way to the shopkeeper.
+        this.add(room, p.barrels[0], 210, wallY + 74, { solid: 8 });
         this.add(room, I.openCrate, 62, room.h - 36, { solid: 9 });
+        this.add(room, I.sacks, room.w - 30, wallY + 48, { solid: 10 });
         this.add(room, p.crates[0], room.w - 54, room.h - 42, { solid: 9 });
         this.add(room, I.plant, room.w - 26, room.h - 26, { solid: 6 });
         this.add(room, I.rugs[1], cx - 40, room.h - 48, { layer: 'ground' });
@@ -370,9 +382,11 @@ export class RoomBuilder {
         this.add(room, I.logPile, cx + 66, wallY + 26, { solid: 9 });
         this.add(room, p.bed, 48, room.h - 34, { solid: 12 });
         this.add(room, p.bed, 104, room.h - 34, { solid: 12 });
-        // A candle by each bed. Guests go up in the dark otherwise.
+        // A candle by each bed. Guests go up in the dark otherwise — and both
+        // stands stay left of the doorway lane, since a 5px solid parked
+        // directly in front of the mat is the one place nothing may stand.
         this.add(room, I.nightstand, 76, room.h - 38, { solid: 5 });
-        this.add(room, I.nightstand, 132, room.h - 38, { solid: 5 });
+        this.add(room, I.nightstand, 24, room.h - 38, { solid: 5 });
         room.bed = { x: 48, y: room.h - 34 };
         // Warm underfoot: the red rug read as the tavern's, so the inn gets
         // its own in the gold ramp.
@@ -381,6 +395,13 @@ export class RoomBuilder {
         this.sconce(room, 104, wallY - 10);
         this.sconce(room, 196, wallY - 10);
         this.add(room, I.sillWindow, 228, wallY - 4, { sortY: 0 });
+        // Somewhere for a guest to sit. The right-hand third of the common
+        // room was bare boards from the stairs all the way to the door.
+        this.add(room, p.table, 198, room.h - 52, { solid: 13 });
+        this.add(room, I.mug, 192, room.h - 64, { sortY: room.h - 51 });
+        this.add(room, I.candle, 206, room.h - 64, { sortY: room.h - 51 });
+        this.add(room, I.stool, 172, room.h - 48, { solid: 5 });
+        this.add(room, I.stool, 224, room.h - 48, { solid: 5 });
         this.add(room, I.plant, room.w - 22, room.h - 30, { solid: 6 });
         // No `cast` here on purpose. ORIN works the tavern (`work: 'tavern'`
         // in CAST) and this figure would put him behind two counters at once;
@@ -411,7 +432,6 @@ export class RoomBuilder {
         // The window is the altarpiece. A little framed landscape over the
         // chancel was the reason this room read as somebody's parlour.
         this.add(room, I.stainedGlass, cx, wallY - 6, { sortY: 0 });
-        this.add(room, I.rugs[1], cx, wallY + 46, { layer: 'ground' });
         this.add(room, I.lectern, cx, wallY + 44, { solid: 8 });
         this.add(room, I.candleStand, cx - 32, wallY + 48, { solid: 5 });
         this.add(room, I.candleStand, cx + 32, wallY + 48, { solid: 5 });
@@ -476,17 +496,18 @@ export class RoomBuilder {
         this.add(room, I.sackStack, 66, room.h - 34, { solid: 11 });
         this.add(room, p.crates[1], room.w - 28, room.h - 58, { solid: 9 });
         this.add(room, I.trough, 196, room.h - 40, { solid: 10 });
-        // Loose straw where it actually falls: under the bales, along the
-        // stalls, and wherever the animals have been standing.
-        for (const [sx, sy] of [
-          [78, wallY + 62],
-          [150, room.h - 26],
-          [214, wallY + 52],
-          [110, room.h - 62],
-        ] as [number, number][]) {
-          this.add(room, I.straw[(sx + sy) % 3], sx, sy, { layer: 'ground' });
-        }
+        // Loose straw where it actually falls. Only two of these, and only
+        // where the floor has been trodden dark: scattered over bright straw
+        // the decal is invisible, and four of them was three wasted draws.
+        this.add(room, I.straw[0], 150, room.h - 26, { layer: 'ground' });
+        this.add(room, I.straw[2], 214, wallY + 52, { layer: 'ground' });
+        // The milking stool and the feed bowl: the two objects that say the
+        // animals in here are worked rather than parked.
+        this.add(room, I.stool, 146, wallY + 58, { solid: 5 });
         this.add(room, I.bowl, 108, room.h - 36, { sortY: room.h - 36 });
+        // Nothing goes in the bottom-centre strip: that is the lane from the
+        // doorway the player spawns in.
+        this.add(room, I.hayBales[1], 224, room.h - 26, { solid: 9 });
         const an = this.a.animals;
         this.add(room, an.cow.idle, 124, wallY + 56, { solid: 10 });
         this.add(room, an.sheep.graze, 166, wallY + 84, { solid: 9, flip: true });
@@ -513,6 +534,9 @@ export class RoomBuilder {
         // Somebody's mending, left on the stool by the fire.
         this.add(room, I.sewing, cx - 50, room.h - 59, { sortY: room.h - 51 });
         this.add(room, I.plant, 26, room.h - 26, { solid: 6 });
+        // The household chest, against the left wall: every other object in
+        // here is a table or a seat, and the left third had nothing on it.
+        this.add(room, p.chestClosed, 38, room.h - 62, { solid: 9 });
         this.add(room, I.sillWindow, cx + 14, wallY - 4, { sortY: 0 });
         this.add(room, I.paintings[rng.int(0, 1)], cx - 16, wallY - 12, { sortY: 0 });
         this.sconce(room, cx + 66, wallY - 10);
