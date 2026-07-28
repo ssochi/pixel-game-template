@@ -8,7 +8,7 @@
  * (plaster panels between dark beams) which gives a small sprite a lot of
  * structure for very few pixels.
  */
-import { PixelBuffer, rgba, shade, type RGBA } from './pixel';
+import { PixelBuffer, rgba, shade, TRANSPARENT, type RGBA } from './pixel';
 import { P, R, type Ramp } from './palette';
 import { bakeSheet, clip, type Clip, type Sheet } from './sheet';
 import { RNG, hash2 } from '../engine/rng';
@@ -407,6 +407,13 @@ export function tradeSign(kind: SignKind): PixelBuffer {
  * With 8 paddles the wheel repeats every 45 degrees, so the loop only needs to
  * cover 45/8 degrees per frame to read as continuous rotation — turning it a
  * full 45 degrees per frame would look completely static.
+ *
+ * The first version was hairline spokes plus a 1px tangent bar per paddle,
+ * which reads as a cartwheel: a wheel is only machinery if you can see the
+ * *boards* that catch the water and the mass at the hub that carries the axle.
+ * So each paddle here is a real board — three radial steps thick, lit on the
+ * inner face and kept dark on the outer edge so consecutive blades separate —
+ * and the hub gets four heavy cross spokes on top of the eight light ones.
  */
 export function waterWheelClip(): Clip {
   const frames: PixelBuffer[] = [];
@@ -415,28 +422,69 @@ export function waterWheelClip(): Clip {
   const cx = size / 2;
   const cy = size / 2;
   const PADDLES = 8;
+  /** Radius of the inner face of a paddle board. */
+  const BOARD = RAD - 1;
   for (let f = 0; f < 8; f++) {
     const b = new PixelBuffer(size, size);
     const rot = (f / 8) * ((Math.PI * 2) / PADDLES);
-    // Rims
+    // Two hoops: a heavy outer rim the boards are nailed to, and an inner one
+    // the spokes die into.
     b.ellipse(cx, cy, RAD, RAD, R.wood[1], false);
-    b.ellipse(cx, cy, RAD - 3, RAD - 3, R.wood[1], false);
+    b.ellipse(cx, cy, RAD - 1, RAD - 1, R.wood[2], false);
+    b.ellipse(cx, cy, RAD - 6, RAD - 6, R.wood[1], false);
+    // Eight light spokes, then four heavy cross spokes over them: the cross is
+    // what gives the centre enough mass to read at this size.
+    for (let i = 0; i < PADDLES; i++) {
+      const a = rot + (i / PADDLES) * Math.PI * 2;
+      b.line(cx + Math.cos(a) * 4, cy + Math.sin(a) * 4, cx + Math.cos(a) * (RAD - 3), cy + Math.sin(a) * (RAD - 3), R.wood[1]);
+    }
+    for (let i = 0; i < 4; i++) {
+      const a = rot + (i / 4) * Math.PI * 2;
+      b.capsule(
+        cx + Math.cos(a) * 3,
+        cy + Math.sin(a) * 3,
+        cx + Math.cos(a) * (RAD - 4),
+        cy + Math.sin(a) * (RAD - 4),
+        1.4,
+        R.wood[2],
+      );
+    }
+    // Paddle boards, laid tangent to the rim and moving with `rot`.
     for (let i = 0; i < PADDLES; i++) {
       const a = rot + (i / PADDLES) * Math.PI * 2;
       const ca = Math.cos(a);
       const sa = Math.sin(a);
-      // Spoke
-      b.line(cx + ca * 3, cy + sa * 3, cx + ca * (RAD - 2), cy + sa * (RAD - 2), R.wood[2]);
-      // Paddle: a short bar tangent to the rim.
-      const px = cx + ca * (RAD - 1);
-      const py = cy + sa * (RAD - 1);
-      b.capsule(px - sa * 4, py + ca * 4, px + sa * 4, py - ca * 4, 1.4, R.wood[3]);
-      // Water clinging to the paddles on the way up out of the river.
-      if (sa > 0.2 && ca > 0) b.capsule(px - sa * 3, py + ca * 3, px + sa * 3, py - ca * 3, 1, R.water[3]);
+      // Tangent unit vector — the direction the board actually lies along.
+      const tx = -sa;
+      const ty = ca;
+      const half = 5;
+      for (let k = 0; k < 3; k++) {
+        const px = cx + ca * (BOARD + k);
+        const py = cy + sa * (BOARD + k);
+        // Inner face lit, middle base tone, outer edge dark: that dark edge is
+        // the only thing that stops eight blades merging into a solid ring.
+        const step = k === 0 ? 3 : k === 1 ? 2 : 0;
+        b.capsule(px - tx * half, py - ty * half, px + tx * half, py + ty * half, 0.7, R.wood[step]);
+      }
+      const bx = cx + ca * (BOARD + 1);
+      const by = cy + sa * (BOARD + 1);
+      if (sa > 0.75) {
+        // The one or two blades actually in the river: wet along their whole
+        // length, with a bright fleck of foam.
+        b.capsule(bx - tx * half, by - ty * half, bx + tx * half, by + ty * half, 0.7, R.water[3]);
+        b.set(Math.round(bx + tx * 2), Math.round(by + ty * 2), R.water[4]);
+        b.set(Math.round(bx - tx * 3), Math.round(by - ty * 3), R.water[2]);
+      } else if (sa > 0.15 && ca > 0) {
+        // Just lifted clear: water still clinging to the middle of the board.
+        b.capsule(bx - tx * 3, by - ty * 3, bx + tx * 3, by + ty * 3, 0.7, R.water[2]);
+      }
     }
-    // Hub
+    // Hub last, over the spoke roots: boss, then the iron axle end.
+    b.ellipse(cx, cy, 5, 5, R.wood[1]);
     b.ellipse(cx, cy, 4, 4, R.wood[2]);
-    b.ellipse(cx, cy, 2, 2, R.metal[1]);
+    b.ellipse(cx - 1, cy - 1, 3, 3, R.wood[3]);
+    b.ellipse(cx, cy, 2, 2, R.metal[2]);
+    b.set(cx - 1, cy - 1, R.metal[4]);
     b.selOutline();
     frames.push(b);
   }
@@ -485,37 +533,94 @@ export function haystack(seed: number): PixelBuffer {
   return b;
 }
 
+/**
+ * Scarecrow.
+ *
+ * The old one was a square head on a stick with the arms drawn *along* the
+ * crossbar, which is a signpost, not a scarecrow. Four things carry the read
+ * here: the cross frame, sleeves that hang **down** off the bar because there
+ * is no arm inside them, a round head under a wide straw brim, and old clothes
+ * that are visibly patched. Straw pokes out wherever the clothes end.
+ */
 export function scarecrow(): PixelBuffer {
   const b = new PixelBuffer(24, 34);
-  b.groundShadow(12, 31, 6, 2, 110);
-  // Cross frame: the post is 2px, the arm only 1px so it doesn't read as a log.
-  b.fillRect(11, 10, 2, 21, R.wood[1]);
-  b.hline(5, 18, 15, R.wood[1]);
-  b.hline(5, 18, 16, R.wood[0]);
-  // Straw-stuffed shirt, sleeves ending in tufts of straw for hands.
-  b.fillRect(7, 13, 10, 11, R.red[2]);
-  b.fillRect(7, 13, 10, 2, R.red[3]);
-  b.fillRect(7, 21, 10, 3, R.red[1]);
-  b.fillRect(5, 14, 2, 3, R.red[2]);
-  b.fillRect(17, 14, 2, 3, R.red[1]);
-  for (const [x, c] of [
-    [4, R.sand[3]],
-    [19, R.sand[2]],
-  ] as [number, RGBA][]) {
-    b.set(x, 15, c);
-    b.set(x, 16, c);
-    b.set(x + (x < 12 ? -1 : 1), 16, c);
-  }
-  for (let i = 0; i < 5; i++) b.set(8 + i * 2, 24 + (i % 2), R.sand[3]);
-  // Sack head with a stitched face and a battered hat.
-  b.fillRect(8, 4, 8, 8, R.sand[3]);
-  b.fillRect(8, 4, 8, 2, R.sand[4]);
-  b.set(10, 7, R.night[0]);
-  b.set(13, 7, R.night[0]);
-  b.hline(10, 13, 10, R.night[0]);
-  b.fillRect(6, 2, 12, 2, R.wood[2]);
-  b.fillRect(9, 0, 6, 3, R.wood[2]);
-  b.hline(9, 14, 0, R.wood[3]);
+  b.groundShadow(12, 31, 8, 2.4, 120);
+  // Cross frame. 2px upright, 1px crossbar with a 1px shadow under it so the
+  // bar reads as a stick lashed on rather than a second beam.
+  b.fillRect(11, 12, 2, 19, R.wood[1]);
+  b.vline(11, 12, 30, R.wood[2]);
+  b.hline(3, 20, 15, R.wood[2]);
+  b.hline(3, 20, 16, R.wood[0]);
+  b.set(10, 16, R.wood[0]);
+  b.set(13, 16, R.wood[0]);
+
+  // Patched coat hung over the frame.
+  b.fillRect(7, 14, 10, 12, R.red[2]);
+  b.fillRect(7, 14, 10, 2, R.red[3]);
+  b.fillRect(7, 23, 10, 3, R.red[1]);
+  b.vline(7, 14, 25, R.red[3]);
+  b.vline(16, 14, 25, R.red[1]);
+  // Two patches of another cloth, each ringed with a 1px stitch line.
+  b.fillRect(9, 18, 3, 3, R.purple[2]);
+  b.strokeRect(8, 17, 5, 5, R.purple[0]);
+  b.fillRect(13, 21, 3, 3, R.purple[1]);
+  b.strokeRect(12, 20, 5, 5, R.purple[0]);
+  // Straw bursting out at the hem.
+  b.set(8, 26, R.sand[3]);
+  b.set(10, 27, R.sand[4]);
+  b.set(13, 26, R.sand[2]);
+  b.set(15, 27, R.sand[3]);
+
+  // Empty sleeves: they drop off the ends of the bar under their own weight.
+  b.fillRect(4, 16, 3, 4, R.red[2]);
+  b.fillRect(3, 19, 3, 5, R.red[2]);
+  b.vline(3, 19, 23, R.red[3]);
+  b.hline(3, 5, 23, R.red[0]);
+  b.fillRect(17, 16, 3, 4, R.red[1]);
+  b.fillRect(18, 19, 3, 5, R.red[1]);
+  b.vline(20, 19, 23, R.red[0]);
+  b.hline(18, 20, 23, R.red[0]);
+  // Shoulder seams, so the shaded sleeve doesn't melt into the shaded side of
+  // the coat into one flat slab of red.
+  b.vline(16, 16, 19, R.red[0]);
+  // Straw hands out of the cuffs.
+  b.set(4, 24, R.sand[3]);
+  b.set(3, 25, R.sand[2]);
+  b.set(5, 25, R.sand[4]);
+  b.set(19, 24, R.sand[3]);
+  b.set(20, 25, R.sand[2]);
+  b.set(18, 25, R.sand[3]);
+
+  // Round sack head with a stitched face, sitting low enough on the shoulders
+  // that the brim doesn't eat all of it.
+  b.ellipse(12, 11, 4.2, 3.4, R.sand[2]);
+  b.ellipse(11, 10, 3.2, 2.4, R.sand[3]);
+  b.set(10, 11, R.night[0]);
+  b.set(14, 11, R.night[0]);
+  b.set(10, 12, R.night[1]);
+  b.set(14, 12, R.night[1]);
+  b.hline(11, 13, 13, R.night[0]);
+
+  // Wide-brimmed straw hat: a flat brim ellipse, a crown on top, a band where
+  // the two meet. The brim overhanging the head is the whole silhouette.
+  b.ellipse(12, 6, 8, 2.6, R.gold[1]);
+  b.ellipse(12, 5, 8, 2.4, R.gold[2]);
+  b.ellipse(11, 5, 6, 1.8, R.gold[3]);
+  b.fillRect(9, 1, 7, 4, R.gold[2]);
+  b.hline(9, 15, 1, R.gold[3]);
+  b.vline(9, 1, 4, R.gold[3]);
+  b.vline(15, 1, 4, R.gold[1]);
+  b.hline(9, 15, 4, R.wood[1]);
+  // Notches bitten out of the brim — an old hat, not a new one.
+  b.set(19, 4, TRANSPARENT);
+  b.set(4, 6, TRANSPARENT);
+
+  // A tuft of grass at the foot of the post.
+  b.line(8, 31, 5, 28, R.leaf[1]);
+  b.line(10, 31, 9, 26, R.leaf[2]);
+  b.line(13, 31, 15, 27, R.leaf[1]);
+  b.line(15, 31, 18, 29, R.leaf[2]);
+  b.hline(6, 18, 31, R.leaf[0]);
   b.selOutline();
   return b;
 }

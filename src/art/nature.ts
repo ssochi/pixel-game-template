@@ -406,10 +406,10 @@ export function tree(seed: number, kind: 'oak' | 'pine' | 'dead' = 'oak'): Pixel
     // [bottom row, half width, height]; the gaps between one tier's apex and
     // the next tier's bottom are the exposed trunk.
     const tiers: [number, number, number][] = [
-      [45, 15.5, 11],
-      [32, 12.6, 9],
-      [20, 9.8, 8],
-      [10, 7.2, 6],
+      [46, 15.5, 12],
+      [33, 12.8, 11],
+      [21, 10.0, 9],
+      [11, 7.4, 7],
       [5, 3.0, 3],
     ];
     for (const [bottom, half, hgt] of tiers) pineTier(b, cx, bottom, half * rng.range(0.86, 1.12), hgt, rng);
@@ -457,54 +457,47 @@ export function tree(seed: number, kind: 'oak' | 'pine' | 'dead' = 'oak'): Pixel
     b.ellipse(ex + rng.range(-1.2, 1.2), ey + rng.range(-1.2, 1.2), rng.range(0.7, 1.7), rng.range(0.7, 1.4), R.leaf[0]);
   }
 
-  // 3. Body value, eroded from the bottom-right only: the dark survives as a
-  //    rim there and every bump keeps its dark edge.
+  // 3. Interior, shaded in 3x2 leaf clumps.
+  //
+  //    The value of a clump comes from a field — light falls from the upper
+  //    left, and it is crushed towards the darkest step where the canopy sits
+  //    down onto the trunk. Sampling that field on a 3x2 grid (with smooth
+  //    noise, so neighbouring cells often agree and merge into bigger bunches)
+  //    is what makes it read as clumps of leaves instead of a smooth dome or
+  //    per-pixel confetti. Only pixels 2px in from the bottom-right edge are
+  //    touched, so the darkest step survives there as a rim and every contour
+  //    bump keeps its dark edge.
   const src = b.clone();
+  const capTop = cy - 20;
+  const capBot = cy + 14;
   for (let y = 0; y < b.h; y++) {
     for (let x = 0; x < b.w; x++) {
       if (!solid(src, x, y) || !sameRGB(src.get(x, y), R.leaf[0])) continue;
       if (!solid(src, x + 1, y) || !solid(src, x, y + 1) || !solid(src, x + 1, y + 1)) continue;
       if (!solid(src, x + 2, y) || !solid(src, x, y + 2)) continue;
-      b.set(x, y, R.leaf[1]);
-    }
-  }
-  // 4. One straight-ish plane break for the lit upper mass — a plane, not a
-  //    ring; a ring inset from the outline is pillow shading.
-  for (let y = 0; y < b.h; y++) {
-    for (let x = 0; x < b.w; x++) {
-      if (!sameRGB(b.get(x, y), R.leaf[1]) || !solid(b, x, y)) continue;
-      if (y < cy + 2 - (x - cx) * 0.22) b.set(x, y, R.leaf[2]);
-    }
-  }
-  // 5. Lit clumps, 2-3px blocks in the upper left, a few with a 1px sparkle.
-  for (let i = 0; i < 26; i++) {
-    const x = Math.round(cx + rng.range(-17, 9));
-    const y = Math.round(cy + rng.range(-17, 3));
-    if (!sameRGB(b.get(x, y), R.leaf[2])) continue;
-    const cw = 2 + rng.int(0, 1);
-    for (let yy = y; yy < y + 1 + rng.int(0, 1); yy++) {
-      for (let xx = x; xx < x + cw; xx++) if (sameRGB(b.get(xx, yy), R.leaf[2])) b.set(xx, yy, R.leaf[3]);
-    }
-    if (rng.chance(0.35) && sameRGB(b.get(x, y), R.leaf[3])) b.set(x, y, R.leaf[4]);
-  }
-  // 6. The canopy sits *on* the trunk: darken where the two meet, otherwise the
-  //    tree looks like a balloon on a stick.
-  for (let y = cy; y < b.h; y++) {
-    for (let x = 0; x < b.w; x++) {
-      const c = b.get(x, y);
-      if (!solid(b, x, y) || !R.leaf.some((l) => sameRGB(l, c))) continue;
-      const dx = (x - cx) / 12;
+      const cellN = fbm(Math.floor(x / 3) * 1.1, Math.floor(y / 2) * 1.7, 2);
+      const vert = (capBot - y) / (capBot - capTop);
+      const horiz = (cx + 9 - x) / 40;
+      const dx = (x - cx) / 11;
       const dy = (y - (cy + 15)) / 9;
-      if (dx * dx + dy * dy < 1) b.set(x, y, R.leaf[0]);
+      const join = Math.max(0, 1 - (dx * dx + dy * dy));
+      const t = 0.62 * vert + 0.24 * horiz + (cellN - 0.5) * 0.55 - join * 0.75;
+      b.set(x, y, R.leaf[t > 0.82 ? 4 : t > 0.58 ? 3 : t > 0.36 ? 2 : t > 0.14 ? 1 : 0]);
     }
   }
-  // 7. Two small gaps where sky shows through, so the mass isn't solid.
+  // 4. A few 1px sparkles on the brightest clumps, on their upper-left corner.
+  for (let i = 0; i < 8; i++) {
+    const x = Math.round(cx + rng.range(-15, 5));
+    const y = Math.round(cy + rng.range(-16, -2));
+    if (sameRGB(b.get(x, y), R.leaf[3]) && sameRGB(b.get(x + 1, y), R.leaf[3])) b.set(x, y, R.leaf[4]);
+  }
+  // 5. Two small gaps where sky shows through, so the mass isn't solid.
   for (let i = 0; i < 2; i++) {
-    const gx = Math.round(cx + rng.range(-11, 11));
-    const gy = Math.round(cy + rng.range(-9, 2));
-    if (!solid(b, gx, gy)) continue;
-    for (let x = gx; x < gx + 3; x++) if (sameRGB(b.get(x, gy), R.leaf[2]) || sameRGB(b.get(x, gy), R.leaf[1])) b.set(x, gy, TRANSPARENT);
-    if (sameRGB(b.get(gx + 1, gy + 1), R.leaf[1])) b.set(gx + 1, gy + 1, TRANSPARENT);
+    const gx = Math.round(cx + rng.range(-12, 8));
+    const gy = Math.round(cy + rng.range(-10, 0));
+    if (!sameRGB(b.get(gx, gy), R.leaf[2]) && !sameRGB(b.get(gx, gy), R.leaf[3])) continue;
+    for (let y = gy; y < gy + 2; y++)
+      for (let x = gx; x < gx + 3; x++) if (solid(b, x, y)) b.set(x, y, TRANSPARENT);
   }
   b.selOutline();
   return b;

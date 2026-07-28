@@ -243,7 +243,9 @@ export class RoomBuilder {
       }
       case 'inn': {
         this.add(room, I.counterShop, 70, wallY + 42, { solid: 18 });
-        this.add(room, I.stairs, room.w - 42, wallY + 30, { solid: 14 });
+        // Hard against the right-hand wall: a flight of stairs floating in the
+        // middle of the back wall reads as a decal, not as a way upstairs.
+        this.add(room, I.stairs, room.bounds.x1 - 16, wallY + 34, { solid: 14 });
         this.add(room, I.fireplace, cx + 30, wallY + 2, { sortY: 0 });
         room.lights.push({ x: cx + 30, y: wallY - 12, radius: 100, color: P.fire, intensity: 1.15, flicker: 0.28, seed: 9 });
         this.add(room, p.bed, 48, room.h - 34, { solid: 12 });
@@ -252,7 +254,10 @@ export class RoomBuilder {
         this.add(room, I.rugs[0], cx + 20, room.h - 46, { layer: 'ground' });
         this.add(room, I.paintings[1], 150, wallY - 12, { sortY: 0 });
         this.add(room, I.plant, room.w - 22, room.h - 30, { solid: 6 });
-        room.npcs.push({ x: 70, y: wallY + 26, skin: 0, role: 'innkeeper', cast: 'orin' });
+        // No `cast` here on purpose. ORIN works the tavern (`work: 'tavern'`
+        // in CAST) and this figure would put him behind two counters at once;
+        // the desk clerk is an anonymous extra instead.
+        room.npcs.push({ x: 70, y: wallY + 26, skin: 0, role: 'innkeeper' });
         break;
       }
       case 'smithy': {
@@ -282,22 +287,37 @@ export class RoomBuilder {
         break;
       }
       case 'mill': {
-        this.add(room, I.sacks, 44, wallY + 40, { solid: 10 });
-        this.add(room, I.sacks, 78, wallY + 46, { solid: 10 });
+        // The mill had no mill in it: shelves and sacks are dressing, the stone
+        // is the machine the building exists for. It goes centre-left, with the
+        // meal spout beside it so the grain visibly goes somewhere.
+        this.add(room, I.millstone, 86, wallY + 64, { solid: 15 });
+        this.add(room, I.flourChute, 126, wallY + 70, { solid: 9 });
+        this.add(room, I.sacks, 40, wallY + 36, { solid: 10 });
+        this.add(room, I.sacks, 64, wallY + 52, { solid: 10 });
         this.add(room, I.sacks, room.w - 50, room.h - 34, { solid: 10 });
-        this.add(room, p.crates[0], cx, wallY + 44, { solid: 9 });
-        this.add(room, I.stairs, room.w - 40, wallY + 30, { solid: 14 });
-        this.add(room, I.shelves[1], cx + 50, wallY - 4, { sortY: 0 });
-        room.npcs.push({ x: cx - 30, y: room.h - 50, skin: 4, role: 'miller', cast: 'halder' });
+        // Was a bookshelf — a miller stores grain, not novels.
+        this.add(room, I.sacks, cx + 60, wallY + 38, { solid: 10 });
+        this.add(room, p.crates[0], 144, wallY + 22, { solid: 9 });
+        this.add(room, I.stairs, room.bounds.x1 - 16, wallY + 34, { solid: 14 });
+        room.npcs.push({ x: 150, y: room.h - 46, skin: 4, role: 'miller', cast: 'halder' });
         break;
       }
       case 'barn': {
+        // A barn with nothing alive in it is a shed. Three animals on the straw,
+        // bodies staggered in both axes so they read as separate silhouettes.
+        this.add(room, I.stairs, room.bounds.x0 + 16, wallY + 34, { solid: 14 });
+        this.add(room, I.hayBales[0], 60, wallY + 26, { solid: 9 });
+        this.add(room, I.hayBales[1], 86, wallY + 36, { solid: 9, flip: true });
         for (let i = 0; i < 3; i++) {
-          this.add(room, p.fence, 40 + i * 20, wallY + 52, { solid: 6 });
+          this.add(room, p.fence, 142 + i * 20, wallY + 24, { solid: 6 });
         }
-        this.add(room, I.sacks, room.w - 46, wallY + 42, { solid: 10 });
-        this.add(room, p.crates[1], room.w - 80, wallY + 46, { solid: 9 });
-        this.add(room, I.stairs, 40, wallY + 30, { solid: 14 });
+        this.add(room, I.sacks, room.w - 38, wallY + 40, { solid: 10 });
+        this.add(room, p.crates[1], room.w - 28, room.h - 58, { solid: 9 });
+        this.add(room, I.trough, 196, room.h - 40, { solid: 10 });
+        const an = this.a.animals;
+        this.add(room, an.cow.idle, 124, wallY + 56, { solid: 10 });
+        this.add(room, an.sheep.graze, 166, wallY + 84, { solid: 9, flip: true });
+        this.add(room, an.chicken.graze, 96, room.h - 38, { solid: 8 });
         break;
       }
       default: {

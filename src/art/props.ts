@@ -163,28 +163,72 @@ export function rug(): PixelBuffer {
   return b;
 }
 
+/**
+ * A bed, seen from above with the head of it at the top of the sprite.
+ *
+ * The first version was a white slab with a blue grid on it, which reads as a
+ * cupboard lying on its back. A bed is legible from three things and only
+ * those: a *headboard standing up* at one end, a white pillow bulge under it,
+ * and a coloured blanket that covers roughly two thirds of the length and
+ * stops short of the foot so the white sheet shows through. Everything else
+ * here — rails, 1px legs, contact shadow — is there to keep it sitting on the
+ * floor instead of floating.
+ */
 export function bed(): PixelBuffer {
   const b = new PixelBuffer(26, 40);
-  b.groundShadow(13, 37, 11, 3, 110);
-  // Frame: headboard at the top, side rails, footboard at the bottom.
-  planks(b, 2, 2, 22, 5, 31);
-  b.fillRect(2, 6, 22, 32, P.woodDark);
-  b.fillRect(2, 6, 2, 32, P.wood);
-  b.fillRect(22, 6, 2, 32, P.woodDark);
-  planks(b, 2, 34, 22, 4, 33);
-  // Mattress + pillow
-  b.fillRect(4, 7, 18, 5, shade(P.white, -0.04));
-  b.fillRect(5, 8, 16, 3, P.white);
-  b.set(6, 9, shade(P.white, -0.14));
-  // Blanket with a folded hem and a couple of creases.
-  b.fillRect(4, 13, 18, 21, P.coat);
-  b.fillRect(4, 13, 18, 3, P.coatLight);
-  b.fillRect(4, 16, 18, 1, P.coatDark);
-  for (const y of [21, 27]) b.hline(5, 20, y, P.coatDark);
-  b.vline(4, 13, 33, P.coatLight);
-  b.vline(21, 13, 33, P.coatDark);
+  b.groundShadow(13, 38, 12, 2.6, 120);
+  // Headboard: a real panel standing at the head, vertical boards, lit top rail.
+  b.fillRect(2, 1, 22, 8, P.woodDark);
+  planks(b, 3, 2, 20, 6, 31, true);
+  b.hline(2, 23, 1, P.woodPale);
+  b.hline(2, 23, 8, shade(P.woodDark, -0.4));
+  for (const x of [8, 13, 18]) b.vline(x, 2, 7, shade(P.woodDark, -0.2));
+  // Corner posts: 1px, at all four corners. The two at the head flank the
+  // board; the two at the foot are the only legs the 3/4 view actually shows.
+  b.vline(1, 3, 10, P.woodDark);
+  b.vline(24, 3, 10, P.woodDark);
+  b.set(1, 3, P.woodLight);
+  b.set(24, 3, P.wood);
+  // Side rails and foot rail.
+  b.fillRect(2, 9, 2, 28, P.wood);
+  b.fillRect(22, 9, 2, 28, P.woodDark);
+  b.fillRect(2, 34, 22, 3, P.woodDark);
+  b.hline(2, 23, 34, P.wood);
+  b.vline(3, 37, 38, P.woodDark);
+  b.vline(22, 37, 38, P.woodDark);
+  // Sheet over the whole mattress. It is deliberately held at paper[2], not at
+  // the top of the ramp: if the sheet is already the brightest thing on the
+  // sprite the pillow has nowhere left to go and the two merge into one slab —
+  // which is exactly how the old version turned into a white cupboard door.
+  b.fillRect(4, 9, 18, 25, R.paper[2]);
+  b.vline(4, 9, 33, R.paper[3]);
+  b.hline(4, 21, 9, R.paper[1]);
+  // Pillow: two bulges lit on the top-left, shaded underneath, with a crease
+  // between them so it reads as two and not as one bolster.
+  b.ellipse(8, 12, 4.4, 3.2, R.paper[3]);
+  b.ellipse(17, 12, 4.4, 3.2, R.paper[3]);
+  b.ellipse(7, 11, 3.4, 2.2, R.paper[4]);
+  b.ellipse(16, 11, 3.4, 2.2, R.paper[4]);
+  b.vline(12, 10, 14, R.paper[2]);
+  b.hline(4, 11, 15, R.paper[1]);
+  b.hline(13, 21, 15, R.paper[1]);
+  // Blanket: about two thirds of the mattress, tucked in at the sides, with a
+  // folded hem at the top and its own edge at the bottom.
+  b.fillRect(4, 17, 18, 15, P.coat);
+  b.fillRect(4, 17, 18, 2, P.coatLight);
+  b.hline(4, 21, 19, P.coatDark);
+  b.vline(4, 17, 31, P.coatLight);
+  b.vline(21, 17, 31, P.coatDark);
+  b.hline(4, 21, 31, P.coatDark);
+  // Two crease highlights: a fold catches light along its top edge only.
+  b.hline(6, 16, 23, P.coatLight);
+  b.set(17, 24, P.coatLight);
+  b.hline(9, 19, 27, P.coatLight);
+  b.set(8, 28, P.coatLight);
+  // The sheet turned down at the foot — the white band that says "bed".
+  b.fillRect(4, 32, 18, 2, R.paper[4]);
+  b.hline(4, 21, 33, R.paper[2]);
   b.selOutline();
-  b.rimLight(P.white, 0.2);
   return b;
 }
 

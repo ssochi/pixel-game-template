@@ -365,15 +365,215 @@ export function innerDoor(): PixelBuffer {
   return b;
 }
 
+/**
+ * A flight of stairs going up and away from the camera.
+ *
+ * The first version stacked six identical treads, which reads as a striped
+ * decal pasted onto the back wall. A staircase seen in this projection is a
+ * *perspective* object: every tread further up the flight is narrower (it is
+ * further away) and one step darker (it is further from the room's lamps), the
+ * two stringers converge towards the landing, and the bottom tread needs a
+ * contact shadow or the whole flight floats. Far steps are drawn first so the
+ * near ones overlap them, which is the other half of the depth cue.
+ */
 export function stairsUp(): PixelBuffer {
-  const b = new PixelBuffer(28, 26);
-  for (let i = 0; i < 6; i++) {
-    const y = 22 - i * 4;
-    b.fillRect(2 + i, y, 24 - i * 2, 4, R.wood[2]);
-    b.hline(2 + i, 25 - i, y, R.wood[3]);
-    b.hline(2 + i, 25 - i, y + 3, R.wood[0]);
+  const b = new PixelBuffer(28, 30);
+  const cx = 14;
+  const STEPS = 6;
+  const shape = (i: number): { y: number; x0: number; x1: number } => {
+    const half = 12 - i * 1.5;
+    return { y: 24 - i * 4, x0: Math.round(cx - half), x1: Math.round(cx + half) };
+  };
+  const near = shape(0);
+  const far = shape(STEPS - 1);
+  // Contact shadow at the foot of the flight.
+  b.groundShadow(cx, 28, 13, 2.4, 130);
+  // The dark landing the flight disappears into.
+  b.fillRect(far.x0 + 1, 0, far.x1 - far.x0 - 1, far.y + 2, R.night[0]);
+  b.hline(far.x0 + 1, far.x1 - 1, 0, R.night[1]);
+  // Stringers, then a handrail line a couple of pixels outboard of each. Both
+  // pairs converge on the landing, which is what sells the recession.
+  b.line(near.x0 - 1, near.y + 4, far.x0 - 1, far.y, R.wood[1]);
+  b.line(near.x1 + 1, near.y + 4, far.x1 + 1, far.y, R.wood[0]);
+  b.line(near.x0 - 2, near.y + 1, far.x0 - 2, far.y - 4, R.wood[3]);
+  b.line(near.x1 + 2, near.y + 1, far.x1 + 2, far.y - 4, R.wood[1]);
+  // Balusters: short uprights from the stringer to the rail, thinning out as
+  // the flight recedes.
+  for (let i = 0; i < STEPS; i += 2) {
+    const s = shape(i);
+    b.vline(s.x0 - 2, s.y - 3, s.y, R.wood[1]);
+    b.vline(s.x1 + 2, s.y - 3, s.y, R.wood[0]);
   }
-  b.fillRect(0, 0, 28, 4, R.night[0]);
+  for (let i = STEPS - 1; i >= 0; i--) {
+    const s = shape(i);
+    // Value drops a step at a time going up: nearest treads are lit, the top
+    // of the flight sinks towards the landing.
+    const step = i < 2 ? 2 : i < 4 ? 1 : 0;
+    b.fillRect(s.x0, s.y, s.x1 - s.x0 + 1, 4, R.wood[step]);
+    b.hline(s.x0, s.x1, s.y, R.wood[Math.min(4, step + 2)]);
+    b.hline(s.x0, s.x1, s.y + 3, R.night[i > 3 ? 0 : 1]);
+  }
+  b.selOutline();
+  return b;
+}
+
+/**
+ * The millstone: the machine the whole building exists for.
+ *
+ * Seen from above it is two stacked discs — a fixed bed stone and a smaller
+ * runner turning on top of it — on a timber trestle, with dressing furrows cut
+ * radially into the runner's face and a driving handle pegged near its rim.
+ * Two frames, a sixth of a turn apart and played slowly: the furrows and the
+ * handle move, which is all it takes to read as a heavy thing turning.
+ */
+export function millstoneClip(): Clip {
+  const frames: PixelBuffer[] = [];
+  for (let f = 0; f < 2; f++) {
+    const b = new PixelBuffer(34, 30);
+    const cx = 17;
+    b.groundShadow(cx, 27, 15, 3, 130);
+    // Trestle: two legs and a stretcher, sized so they peek out *below* the
+    // stone. Furniture that is entirely hidden by what stands on it is wasted.
+    for (const lx of [4, 26]) {
+      b.fillRect(lx, 16, 4, 10, R.wood[1]);
+      b.vline(lx, 16, 25, R.wood[2]);
+      b.hline(lx, lx + 3, 25, R.wood[0]);
+    }
+    b.fillRect(6, 22, 22, 2, R.wood[1]);
+    b.hline(6, 27, 22, R.wood[2]);
+    // Bed stone: the rim first, then the top face two pixels higher. That
+    // offset is the stone's thickness — there is no other way to say it here.
+    b.ellipse(cx, 15, 15, 7, R.stone[0]);
+    b.ellipse(cx, 13, 15, 7, R.stone[2]);
+    b.ellipse(cx - 1, 12.5, 13, 6, R.stone[3]);
+    // Runner stone: smaller and higher, so the pair reads as two stones.
+    b.ellipse(cx, 10, 11, 5.5, R.stone[1]);
+    b.ellipse(cx, 8, 11, 5.5, R.stone[3]);
+    b.ellipse(cx - 1, 7.5, 9.5, 4.5, R.stone[4]);
+    // Dressing furrows, straight grooves radiating from the eye. Squashed on
+    // the vertical axis by the same amount as the disc.
+    const rot = f * (Math.PI / 6);
+    for (let i = 0; i < 6; i++) {
+      const a = rot + (i / 6) * Math.PI * 2;
+      const ca = Math.cos(a);
+      const sa = Math.sin(a) * 0.5;
+      b.line(cx + ca * 3, 8 + sa * 3, cx + ca * 9, 8 + sa * 9, R.stone[1]);
+    }
+    // The eye, with the iron rynd bridged across it.
+    b.ellipse(cx, 8, 2.4, 1.5, R.night[1]);
+    b.hline(cx - 3, cx + 3, 8, R.metal[2]);
+    b.set(cx - 3, 8, R.metal[3]);
+    // Driving handle, pegged near the rim and swinging round with the stone.
+    const ha = rot + (f ? Math.PI * 0.62 : Math.PI * 0.12);
+    const hx = cx + Math.cos(ha) * 9;
+    const hy = 8 + Math.sin(ha) * 4.5;
+    b.capsule(hx, hy, hx, hy - 6, 1.2, R.wood[2]);
+    b.set(Math.round(hx), Math.round(hy) - 7, R.wood[3]);
+    b.set(Math.round(hx) + 1, Math.round(hy) - 2, R.wood[0]);
+    // Meal spilt round the base.
+    for (let i = 0; i < 7; i++) b.set(7 + i * 3, 26 + ((i + f) % 2), R.paper[f ? 3 : 4]);
+    b.selOutline();
+    frames.push(b);
+  }
+  return clip(bakeSheet(frames, 17, 28), [0, 1], 1.2);
+}
+
+/**
+ * The meal spout: a planked hopper on posts, feeding a bin of flour. This is
+ * where the ground grain comes out, and it is what turns "a room with a big
+ * stone in it" into a mill.
+ */
+export function flourChute(): PixelBuffer {
+  const b = new PixelBuffer(22, 30);
+  b.groundShadow(11, 28, 9, 2.2, 120);
+  // Support posts, drawn first so the hopper sits on them.
+  b.fillRect(1, 3, 2, 16, R.wood[1]);
+  b.fillRect(19, 3, 2, 16, R.wood[2]);
+  // Hopper: a trapezoid, never a box — a box on stilts reads as a crate.
+  for (let i = 0; i < 10; i++) {
+    const half = 9 - Math.round(i * 0.67);
+    const y = 2 + i;
+    b.hline(11 - half, 11 + half, y, i === 0 ? R.wood[3] : i % 3 === 0 ? R.wood[1] : R.wood[2]);
+  }
+  b.hline(2, 20, 2, R.wood[4]);
+  b.line(2, 3, 8, 11, R.wood[3]);
+  b.line(20, 3, 14, 11, R.wood[0]);
+  // Spout, and the thin fall of meal dropping out of it.
+  b.fillRect(9, 12, 4, 2, R.wood[1]);
+  b.hline(9, 12, 12, R.wood[2]);
+  b.vline(11, 14, 15, R.paper[4]);
+  b.set(10, 15, R.paper[3]);
+  // Bin: a plank box with staves and feet.
+  b.fillRect(2, 19, 18, 9, R.wood[1]);
+  b.fillRect(2, 19, 18, 2, R.wood[2]);
+  for (const x of [5, 10, 15]) b.vline(x, 21, 26, R.wood[0]);
+  b.hline(2, 19, 27, R.wood[0]);
+  b.fillRect(2, 28, 2, 1, R.wood[0]);
+  b.fillRect(18, 28, 2, 1, R.wood[0]);
+  // The meal heaped proud of the rim, lit from the left.
+  b.ellipse(11, 18, 7, 1.8, R.paper[3]);
+  b.ellipse(10, 17, 5, 1.4, R.paper[4]);
+  b.hline(5, 17, 20, R.paper[2]);
+  b.selOutline();
+  return b;
+}
+
+/** A baled truss of hay: a squat box bound with two cords. */
+export function hayBale(seed: number): PixelBuffer {
+  const rng = new RNG(seed);
+  const b = new PixelBuffer(22, 16);
+  b.groundShadow(11, 14, 10, 2.2, 120);
+  // Two planes meeting — the top face and the cut front face — do the reading.
+  // Speckling the whole thing with straw would just make a yellow smudge.
+  b.fillRect(1, 4, 20, 9, R.sand[2]);
+  b.fillRect(1, 2, 20, 3, R.sand[3]);
+  b.hline(2, 19, 2, R.sand[4]);
+  b.hline(1, 20, 12, R.sand[1]);
+  b.vline(1, 4, 12, R.sand[3]);
+  b.vline(20, 4, 12, R.sand[1]);
+  // Straw ends only on the cut face, in clusters rather than as noise.
+  for (let i = 0; i < 9; i++) {
+    const x = 3 + rng.int(0, 16);
+    const y = 5 + rng.int(0, 6);
+    b.set(x, y, R.sand[y < 8 ? 3 : 1]);
+  }
+  // A few wisps standing proud of the top — in 2px pairs, because single stray
+  // pixels read as dirt on the screen rather than as straw.
+  for (let i = 0; i < 3; i++) {
+    const x = 4 + i * 6 + rng.int(0, 2);
+    b.set(x, 1, R.sand[3]);
+    b.set(x + 1, 1, R.sand[4]);
+  }
+  // Two binding cords.
+  for (const cxx of [6, 15]) {
+    b.vline(cxx, 2, 12, R.wood[1]);
+    b.set(cxx, 3, R.wood[2]);
+  }
+  b.selOutline();
+  return b;
+}
+
+/** Livestock water trough: a hollowed log with a still water surface in it. */
+export function waterTrough(): PixelBuffer {
+  const b = new PixelBuffer(26, 16);
+  b.groundShadow(13, 14, 11, 2.2, 120);
+  // Log body with the ends left proud, so it reads as hollowed timber and not
+  // as a crate with blue paint in it.
+  b.fillRect(2, 4, 22, 9, R.wood[1]);
+  b.fillRect(2, 3, 22, 2, R.wood[2]);
+  b.hline(2, 23, 12, R.wood[0]);
+  b.fillRect(1, 2, 3, 11, R.wood[2]);
+  b.fillRect(22, 2, 3, 11, R.wood[1]);
+  // Water: an inset surface, darker where it meets the far side, with two flat
+  // highlight strokes. Flat bands, not a gradient.
+  b.fillRect(5, 4, 16, 5, R.water[2]);
+  b.hline(5, 20, 4, R.water[0]);
+  b.hline(5, 20, 5, R.water[1]);
+  b.hline(7, 12, 7, R.water[3]);
+  b.hline(15, 19, 6, R.water[4]);
+  b.hline(5, 20, 9, R.water[1]);
+  // Iron bands, on the front face only.
+  for (const x of [8, 17]) b.vline(x, 10, 12, R.metal[1]);
   b.selOutline();
   return b;
 }
@@ -394,6 +594,12 @@ export interface InteriorAssets {
   mat: Sheet;
   innerDoor: Sheet;
   stairs: Sheet;
+  /** Mill fittings. */
+  millstone: Clip;
+  flourChute: Sheet;
+  /** Barn fittings. */
+  hayBales: Sheet[];
+  trough: Sheet;
 }
 
 export function bakeInteriors(): InteriorAssets {
@@ -412,7 +618,11 @@ export function bakeInteriors(): InteriorAssets {
     rugs: [still(roomRug(60, 40, R.red), 30, 20), still(roomRug(48, 34, R.purple), 24, 17)],
     mat: still(doorMat(), 14, 11),
     innerDoor: still(innerDoor(), 12, 29),
-    stairs: still(stairsUp(), 14, 25),
+    stairs: still(stairsUp(), 14, 29),
+    millstone: millstoneClip(),
+    flourChute: still(flourChute(), 11, 29),
+    hayBales: [still(hayBale(5), 11, 15), still(hayBale(12), 11, 15)],
+    trough: still(waterTrough(), 13, 15),
   };
 }
 
