@@ -1,7 +1,7 @@
 /** HUD, hotbar, dialogue box, help panel and the full-screen asset gallery. */
 import type { Assets, GalleryGroup } from '../art/assets';
 import { drawClip, drawFrame, type Clip } from '../art/sheet';
-import { drawText, textWidth } from '../engine/font';
+import { drawText, GLYPH_H, textWidth } from '../engine/font';
 import { GAME_H, GAME_W } from '../engine/screen';
 import { HOTBAR_SIZE, ITEMS, iconFor, type Inventory } from './inventory';
 
@@ -58,48 +58,62 @@ const HELP: string[] = [
 ];
 
 export function drawHud(ctx: CanvasRenderingContext2D, s: HudState): void {
-  // Top bar
-  panel(ctx, 2, 2, 128, 9, 0.6);
-  drawText(ctx, `FPS ${s.fps.toString().padStart(3, ' ')}  ${clock(s.dayT)}${s.paused ? ' *' : ''}`, 5, 4, '#cfe0f5');
-  drawText(ctx, `E:${s.entities} P:${s.particles}`, 82, 4, '#7f92b0');
+  // Clock, top-left. This is player-facing time, not a debug readout, so it
+  // always shows.
+  const clk = `${clock(s.dayT)}${s.paused ? ' *' : ''}`;
+  panel(ctx, 2, 2, textWidth(clk) + 6, 9, 0.6);
+  drawText(ctx, clk, 5, 4, '#cfe0f5');
 
-  // Status line
-  const st = `${s.forced ? 'FORCED ' : ''}${(s.forced ?? s.playerState).toUpperCase()}`;
-  panel(ctx, 2, 13, textWidth(st) + 6, 9, 0.6);
-  drawText(ctx, st, 5, 15, s.forced ? '#f0c261' : '#8fd0a0');
+  // Place name, top-right.
+  drawText(ctx, s.place, GAME_W - textWidth(s.place) - 4, 4, '#f0c261');
 
-  const flags = `${s.lighting ? 'LIGHT' : 'light'} ${s.bloom ? 'BLOOM' : 'bloom'}`;
-  drawText(ctx, flags, GAME_W - textWidth(flags) - 4, 4, '#7f92b0');
-  drawText(ctx, s.place, GAME_W - textWidth(s.place) - 4, 13, '#f0c261');
-
-  // Day / money, top-right under the flags.
+  // Day / money, top-right under the place name.
   const day = `DAY ${s.day}`;
-  drawText(ctx, day, GAME_W - textWidth(day) - 4, 22, '#cfe0f5');
+  drawText(ctx, day, GAME_W - textWidth(day) - 4, 13, '#cfe0f5');
   const gold = `${s.gold}G`;
-  drawText(ctx, gold, GAME_W - textWidth(gold) - 4, 31, '#f0c261');
+  drawText(ctx, gold, GAME_W - textWidth(gold) - 4, 22, '#f0c261');
 
   if (s.quest) {
     const q = s.quest.slice(0, 46);
-    panel(ctx, 2, 24, textWidth(q) + 6, 9, 0.6);
-    drawText(ctx, q, 5, 26, '#8fd0a0');
+    panel(ctx, 2, 13, textWidth(q) + 6, 9, 0.6);
+    drawText(ctx, q, 5, 15, '#8fd0a0');
   }
 
-  // Energy bar, bottom-right.
-  const bw = 60;
-  const bx = GAME_W - bw - 6;
+  // Energy bar, bottom-right, with a small "STA" tag and a panel that clears
+  // the screen edge by a few pixels either way.
+  const staLabel = 'STA';
+  const staW = textWidth(staLabel);
+  const bw = 54;
+  const bx = GAME_W - bw - 8;
   const by = GAME_H - 12;
-  panel(ctx, bx - 2, by - 2, bw + 4, 8, 0.6);
+  panel(ctx, bx - staW - 7, by - 2, bw + staW + 11, 8, 0.6);
+  drawText(ctx, staLabel, bx - staW - 4, by - 1, '#7f92b0');
   ctx.fillStyle = '#2a3346';
   ctx.fillRect(bx, by, bw, 4);
   const e = Math.max(0, Math.min(1, s.energy));
   ctx.fillStyle = e > 0.3 ? '#7fd07f' : '#e0713c';
   ctx.fillRect(bx, by, Math.round(bw * e), 4);
 
+  // Debug readouts (FPS, entity/particle counts, AI state, light/bloom
+  // toggles) are dev info, not HUD — only surface them with the help panel.
   if (s.showHelp) {
-    const w = 92;
-    const h = HELP.length * 7 + 8;
-    panel(ctx, 2, GAME_H - h - 2, w, h);
-    HELP.forEach((line, i) => drawText(ctx, line, 6, GAME_H - h + 2 + i * 7, i === 0 ? '#cfe0f5' : '#93a7c6'));
+    const dw = 92;
+    const dbg = [
+      `FPS ${s.fps.toString().padStart(3, ' ')}`,
+      `E:${s.entities} P:${s.particles}`,
+      `${s.forced ? 'FORCED ' : ''}${(s.forced ?? s.playerState).toUpperCase()}`,
+      `${s.lighting ? 'LIGHT' : 'light'} ${s.bloom ? 'BLOOM' : 'bloom'}`,
+    ];
+    const dbgH = dbg.length * 7 + 8;
+    const helpH = HELP.length * 7 + 8;
+    const dbgY = GAME_H - helpH - dbgH - 4;
+    panel(ctx, 2, dbgY, dw, dbgH, 0.6);
+    dbg.forEach((line, i) =>
+      drawText(ctx, line, 6, dbgY + 4 + i * 7, i === 2 ? (s.forced ? '#f0c261' : '#8fd0a0') : '#93a7c6'),
+    );
+
+    panel(ctx, 2, GAME_H - helpH - 2, dw, helpH);
+    HELP.forEach((line, i) => drawText(ctx, line, 6, GAME_H - helpH + 2 + i * 7, i === 0 ? '#cfe0f5' : '#93a7c6'));
   } else {
     drawText(ctx, 'H = HELP', 4, GAME_H - 9, '#5c6a85');
   }
@@ -145,11 +159,16 @@ export function drawHotbar(ctx: CanvasRenderingContext2D, a: Assets, inv: Invent
     // Slot 10 is bound to `0`, so label it with the key you actually press.
     drawText(ctx, i === 9 ? '0' : String(i + 1), x + 2, y0 + 2, sel ? '#f0c261' : '#54617a', null);
   }
-  // Name of the held item, above the bar.
+  // Name of the held item, above the bar. It sits over the world (which can
+  // be pale ground tiles), so it needs its own backing panel to stay legible.
   const held = inv.held;
   if (held) {
     const n = held.name;
-    drawText(ctx, n, Math.round((GAME_W - textWidth(n)) / 2), y0 - 9, '#cfe0f5');
+    const tw = textWidth(n);
+    const tx = Math.round((GAME_W - tw) / 2);
+    const ty = y0 - 9;
+    panel(ctx, tx - 3, ty - 3, tw + 6, GLYPH_H + 6, 0.6);
+    drawText(ctx, n, tx, ty, '#cfe0f5');
   }
 }
 
@@ -170,10 +189,13 @@ export function drawShop(
   stock: { item: string; price: number }[],
   index: number,
   gold: number,
+  owned?: (item: string) => number,
 ): void {
   const w = 170;
   const rowH = 18;
-  const h = 22 + stock.length * rowH;
+  // Extra room below the last row so the control hint doesn't run into it.
+  const footerGap = 8;
+  const h = 22 + stock.length * rowH + footerGap;
   const x = Math.round((GAME_W - w) / 2);
   const y = Math.round((GAME_H - h) / 2);
   panel(ctx, x, y, w, h, 0.94);
@@ -185,7 +207,8 @@ export function drawShop(
     const ry = y + 16 + i * rowH;
     if (i === index) {
       ctx.fillStyle = 'rgba(60,74,100,0.8)';
-      ctx.fillRect(x + 3, ry - 1, w - 6, rowH - 2);
+      // One pixel short of the panel's inner border on the right.
+      ctx.fillRect(x + 3, ry - 1, w - 7, rowH - 2);
     }
     const icon = iconFor(a, s.item);
     if (icon) {
@@ -199,7 +222,12 @@ export function drawShop(
     const def = ITEMS[s.item];
     drawText(ctx, def.name.slice(0, 16), x + 22, ry + 2, gold >= s.price ? '#e8eef8' : '#6b7690');
     const p = `${s.price}G`;
-    drawText(ctx, p, x + w - textWidth(p) - 6, ry + 2, gold >= s.price ? '#f0c261' : '#6b7690');
+    const priceX = x + w - textWidth(p) - 6;
+    drawText(ctx, p, priceX, ry + 2, gold >= s.price ? '#f0c261' : '#6b7690');
+    if (owned) {
+      const oc = `x${owned(s.item)}`;
+      drawText(ctx, oc, priceX - textWidth(oc) - 6, ry + 2, '#5c6a85');
+    }
   });
   drawText(ctx, 'W/S PICK   E BUY   TAB CLOSE', x + 6, y + h - 9, '#7f92b0');
 }
@@ -303,6 +331,29 @@ export function drawDayCard(ctx: CanvasRenderingContext2D, day: number, alpha: n
 const CELL = 60;
 const CELL_H = 66;
 
+/**
+ * Wrap a gallery entry's name to fit `maxW` pixels, breaking on the space
+ * nearest the middle rather than hard-truncating (e.g. "HERO ATTACK DOWN"
+ * becoming "HERO ATTACK D..."). Falls back to a single, unbroken line when
+ * there's no space to break on.
+ */
+function wrapCellName(name: string, maxW: number): string[] {
+  if (textWidth(name) <= maxW) return [name];
+  let best = -1;
+  let bestDist = Infinity;
+  for (let i = 0; i < name.length; i++) {
+    if (name[i] === ' ') {
+      const dist = Math.abs(i - name.length / 2);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = i;
+      }
+    }
+  }
+  if (best === -1) return [name];
+  return [name.slice(0, best), name.slice(best + 1)];
+}
+
 export class Gallery {
   open = false;
   scroll = 0;
@@ -386,7 +437,8 @@ export class Gallery {
     }
     ctx.restore();
 
-    drawText(ctx, e.name.slice(0, 13), x + 1, y + 46, '#a8bcd8');
-    drawText(ctx, `${sheet.fw}X${sheet.fh} ${sheet.count}F`, x + 1, y + 53, '#5c6a85');
+    const nameLines = wrapCellName(e.name, CELL - 6);
+    nameLines.forEach((line, i) => drawText(ctx, line, x + 1, y + 46 + i * 7, '#a8bcd8'));
+    drawText(ctx, `${sheet.fw}X${sheet.fh} ${sheet.count}F`, x + 1, y + 46 + nameLines.length * 7, '#5c6a85');
   }
 }
