@@ -196,22 +196,27 @@ const TOOL_ART: Record<string, string[]> = {
     '................',
     '................',
   ],
+  // A sack, gathered at the neck and tied. The widths step out — mouth 6, cord
+  // 10, body 12 — so the cord reads as a drawstring rather than a hat brim, and
+  // the two cord ends lie down the front instead of sticking out at the sides,
+  // where they looked like handbag straps. The grain is three 2x2 blocks; the
+  // old 1px checker turned to mush in a 20px slot.
   seeds: [
     '................',
-    '....SSSSSS......',
-    '...SssssssS.....',
-    '..SssgsgssS.....',
-    '..SsgsgsgsS.....',
-    '..SssgsgssS.....',
-    '..SsgsgsgsS.....',
-    '..SssssssS......',
-    '...SSSSSS.......',
-    '................',
-    '................',
-    '................',
-    '................',
-    '................',
-    '................',
+    '......ssss......',
+    '.....ssssss.....',
+    '.....sSSSSs.....',
+    '...MMMMMMMMMM...',
+    '...MMMMMMMMMM...',
+    '..ssMMssssMMss..',
+    '..ssMMssssMMSS..',
+    '..ssssssssssSS..',
+    '..ssggssssggSS..',
+    '..ssggssssggSS..',
+    '..ssssssssSSSS..',
+    '..ssssggssSSSS..',
+    '..SsssggsSSSSS..',
+    '...SSSSSSSSSS...',
     '................',
   ],
 };
@@ -231,7 +236,10 @@ function toolIcon(kind: string, seedColour?: RGBA): PixelBuffer {
   const b = parseArt(TOOL_ART[kind], map);
   const out = new PixelBuffer(16, 16);
   out.blit(b, 0, 0);
-  out.selOutline();
+  // A hard keyline, not a selective one. In the world these read against grass
+  // and soil, but in a hotbar slot a hue-matched outline lets a wooden handle
+  // dissolve into the panel; a flat dark edge makes every tool a sticker.
+  out.outline(R.night[0]);
   return out;
 }
 
