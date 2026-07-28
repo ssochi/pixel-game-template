@@ -5,7 +5,7 @@
  * which is the classic pixel-art wind trick: it keeps every pixel on the grid
  * (no rotation blur) while reading as a soft sway.
  */
-import { PixelBuffer, mix, parseArt, rgba, shade, type RGBA } from './pixel';
+import { PixelBuffer, TRANSPARENT, mix, parseArt, rgba, shade, type RGBA } from './pixel';
 import { P, R } from './palette';
 import { bakeSheet, clip, type Clip, type Sheet } from './sheet';
 import { RNG, fbm } from '../engine/rng';
@@ -165,29 +165,32 @@ export function lilyPad(seed: number): PixelBuffer {
   return b;
 }
 
+/**
+ * Mushroom — 7x6 of actual sprite. The old one was 11x10, which next to a 16px
+ * villager read as a parasol; forageables should sit below knee height. At this
+ * size the cap spots have to be single pixels or they eat the whole cap.
+ */
 const MUSHROOM_ART = [
-  '...MMMMM...',
-  '..MoMMMoM..',
-  '.MMMMoMMMM.',
-  '.MMMMMMMMD.',
-  '.DDDDDDDDD.',
-  '..DSSSSSD..',
-  '....SSS....',
-  '....SsS....',
-  '....SSS....',
-  '...SSSSS...',
+  '.MMMMM.',
+  'MHMoMMM',
+  'MMMMMoM',
+  '.DDDDD.',
+  '..SSs..',
+  '.SSSSs.',
 ];
 
 export function mushroom(_seed: number, glow: boolean): PixelBuffer {
   const b = new PixelBuffer(14, 14);
   const art = parseArt(MUSHROOM_ART, {
     M: glow ? R.magic[2] : R.red[2],
+    H: glow ? R.magic[3] : R.red[3],
     o: glow ? R.magic[4] : P.white,
     D: glow ? R.magic[1] : R.red[1],
     S: R.paper[3],
     s: R.paper[2],
   });
-  b.blit(art, 1, 3);
+  // Bottom row stays on y=12 so the (7,13) anchor still sits at the base.
+  b.blit(art, 4, 7);
   b.selOutline();
   return b;
 }
@@ -195,6 +198,172 @@ export function mushroom(_seed: number, glow: boolean): PixelBuffer {
 // ---------------------------------------------------------------------------
 // Trees
 // ---------------------------------------------------------------------------
+
+function sameRGB(a: RGBA, c: RGBA): boolean {
+  return a[0] === c[0] && a[1] === c[1] && a[2] === c[2];
+}
+
+/** "Is this pixel part of the shape" — alpha test used by the shading passes. */
+function solid(b: PixelBuffer, x: number, y: number): boolean {
+  return b.alphaAt(x, y) > 200;
+}
+
+const UP = -Math.PI / 2;
+
+/**
+ * One tapering limb that folds back towards vertical as it travels.
+ *
+ * Both properties matter for reading as a branch: constant-width limbs
+ * radiating from a single point are fingers, and a limb that keeps its launch
+ * angle is a spoke. Real branches leave the trunk thick, bend back up towards
+ * the light and end on a single pixel.
+ */
+function limb(
+  b: PixelBuffer,
+  x: number,
+  y: number,
+  ang: number,
+  len: number,
+  w0: number,
+  w1: number,
+  col: RGBA,
+  fold = 0.75,
+): { x: number; y: number; a: number } {
+  const steps = Math.max(6, Math.round(len * 2));
+  let px = x;
+  let py = y;
+  let a = ang;
+  for (let s = 1; s <= steps; s++) {
+    const t = s / steps;
+    a = ang + (UP - ang) * t * fold;
+    px += Math.cos(a) * (len / steps);
+    py += Math.sin(a) * (len / steps);
+    b.capsule(px, py, px, py, Math.max(0.4, w0 + (w1 - w0) * t), col);
+  }
+  return { x: px, y: py, a };
+}
+
+/** Light from the upper left: left edges catch it, right edges fall away. */
+function edgeLight(b: PixelBuffer, body: RGBA, lit: RGBA, dark: RGBA): void {
+  const src = b.clone();
+  for (let y = 0; y < b.h; y++) {
+    for (let x = 0; x < b.w; x++) {
+      if (!solid(src, x, y) || !sameRGB(src.get(x, y), body)) continue;
+      const l = solid(src, x - 1, y);
+      const r = solid(src, x + 1, y);
+      // 1px twigs (open on both sides) keep the base value — a highlight and a
+      // shadow crammed into one pixel is just noise.
+      if (!l && r) b.set(x, y, lit);
+      else if (l && !r) b.set(x, y, dark);
+    }
+  }
+}
+
+/**
+ * Dead tree.
+ *
+ * The failure mode here is the hand: five limbs of equal thickness leaving one
+ * point on a stubby trunk is a palm with fingers, whatever colour it is. The
+ * fix is structural — one tapered trunk that carries most of the height, limbs
+ * that leave it at clearly different heights, every limb thinning to 1px, and
+ * two snapped-off stubs to say "dead" rather than "bare".
+ */
+function deadTree(b: PixelBuffer, cx: number, baseY: number, rng: RNG): PixelBuffer {
+  const trunkH = 37;
+  const topY = baseY - trunkH;
+  const botW = 7;
+  const topW = 2;
+  // A slow S-curve, so the trunk isn't a ruler.
+  const bendAt = (y: number): number => Math.sin((baseY - y) * 0.062 + 0.5) * 2.3 - 1.1;
+  const widthAt = (y: number): number => {
+    const t = (baseY - y) / trunkH;
+    return Math.max(topW, Math.round(topW + (botW - topW) * Math.pow(1 - t, 1.6)));
+  };
+
+  for (let y = baseY; y >= topY; y--) {
+    const wdt = widthAt(y);
+    b.fillRect(Math.round(cx + bendAt(y) - wdt / 2), y, wdt, 1, R.wood[1]);
+  }
+  // Root flare, so the trunk grows out of the ground instead of being stuck in.
+  b.capsule(cx - 1, baseY - 2, cx - 6, baseY + 1, 1.4, R.wood[1]);
+  b.capsule(cx + 1, baseY - 2, cx + 6, baseY + 1, 1.4, R.wood[1]);
+  b.capsule(cx - 3, baseY - 4, cx - 5, baseY + 1, 1, R.wood[1]);
+
+  const tx = (y: number): number => cx + bendAt(y);
+  // [start height, launch angle, length, base width] — note the spread of
+  // start heights: that alone kills the "fingers from one palm" read.
+  const main: [number, number, number, number, number][] = [
+    [topY + 13, -2.55, 15, 1.9, 0.4],
+    [topY + 6, -0.65, 14, 1.7, 0.42],
+    [topY + 1, -1.9, 12, 1.5, 0.6],
+    [topY, -1.15, 11, 1.4, 0.62],
+  ];
+  for (const [sy, ang, len, w0, fold] of main) {
+    const tip = limb(b, tx(sy), sy, ang, len, w0, 0.55, R.wood[1], fold);
+    for (let i = 0, n = rng.int(2, 3); i < n; i++) {
+      limb(b, tip.x, tip.y, tip.a + rng.range(-0.75, 0.75), rng.range(4, 7), 0.7, 0.4, R.wood[1], 0.5);
+    }
+  }
+  // Snapped stubs: short, blunt, splintered dark at the break.
+  for (const [sy, ang, len] of [
+    [topY + 20, -0.5, 6],
+    [topY + 26, -2.55, 5],
+  ] as [number, number, number][]) {
+    const s = limb(b, tx(sy), sy, ang, len, 1.7, 1.2, R.wood[1], 0.3);
+    b.capsule(s.x, s.y, s.x, s.y, 1.1, R.wood[0]);
+  }
+
+  // Bark: short vertical dashes kept inside the trunk, plus one rot hollow.
+  for (let i = 0; i < 10; i++) {
+    const y = topY + rng.int(3, trunkH - 6);
+    const wdt = widthAt(y);
+    if (wdt < 3) continue;
+    const x0 = Math.round(tx(y) - wdt / 2);
+    b.vline(x0 + rng.int(1, wdt - 2), y, y + rng.int(1, 3), R.wood[0]);
+  }
+  const hy = baseY - 15;
+  b.ellipse(tx(hy) + 0.5, hy, 1.5, 2.4, R.wood[0]);
+
+  edgeLight(b, R.wood[1], R.wood[2], R.wood[0]);
+  b.selOutline();
+  return b;
+}
+
+/**
+ * One conifer tier: a triangular skirt with a saw-toothed lower edge.
+ *
+ * Stacked ellipses read as a cake because every layer has the same smooth
+ * curve and they touch. A tier is instead widest at its own base, its underside
+ * breaks into 3px frond steps, and its top is sloped so the tier above can sit
+ * clear of it with trunk showing in between.
+ */
+function pineTier(b: PixelBuffer, cx: number, bottom: number, half: number, hgt: number, rng: RNG): void {
+  const apex = bottom - hgt;
+  // Independent left/right jitter: symmetric tiers are what make it a cake.
+  const x0 = Math.round(cx - half - rng.range(0, 1.7));
+  const x1 = Math.round(cx + half + rng.range(0, 1.7));
+  const phase = rng.int(0, 2);
+  const split = rng.int(0, 6);
+  for (let x = x0; x <= x1; x++) {
+    const reach = Math.max(1, x < cx ? cx - x0 : x1 - cx);
+    const u = Math.min(1, Math.abs(x - cx) / reach);
+    // Sloped upper edge: apex at the centre, tips at the bottom corners. The
+    // steep exponent keeps the tier thick out to ~2/3 of its span, so the
+    // stack reads as one tree instead of four stacked umbrellas.
+    const top = Math.round(apex + hgt * Math.pow(u, 2.5));
+    // Saw teeth: a repeating 3px motif, not per-pixel noise.
+    const bot = Math.max(top, bottom - ((x - x0 + phase) % 3));
+    const lit = x < cx - half * 0.12;
+    for (let y = top; y <= bot; y++) {
+      let c = lit ? R.leaf[2] : R.leaf[1];
+      if (y - top < 2) c = lit ? R.leaf[3] : R.leaf[2];
+      if (y === bot) c = R.leaf[0];
+      b.set(x, y, c);
+    }
+    // A couple of dark splits so the skirt reads as separate fronds.
+    if ((x - x0 + split) % 7 === 0 && bot - top > 3) b.vline(x, bot - 2, bot, R.leaf[0]);
+  }
+}
 
 export function tree(seed: number, kind: 'oak' | 'pine' | 'dead' = 'oak'): PixelBuffer {
   const rng = new RNG(seed);
@@ -205,6 +374,8 @@ export function tree(seed: number, kind: 'oak' | 'pine' | 'dead' = 'oak'): Pixel
   const baseY = h - 3;
 
   b.groundShadow(cx, baseY, 13, 4, 120);
+
+  if (kind === 'dead') return deadTree(b, cx, baseY, rng);
 
   // Trunk
   const trunkH = kind === 'pine' ? 22 : 26;
@@ -221,76 +392,119 @@ export function tree(seed: number, kind: 'oak' | 'pine' | 'dead' = 'oak'): Pixel
   b.capsule(cx - 1, baseY, cx - 6, baseY + 1, 1.4, P.woodDark);
   b.capsule(cx + 1, baseY, cx + 6, baseY + 1, 1.4, P.woodDark);
 
-  if (kind === 'dead') {
-    for (let i = 0; i < 5; i++) {
-      const a = -Math.PI / 2 + rng.range(-1.2, 1.2);
-      const len = rng.range(9, 16);
-      const sx = cx + rng.range(-2, 2);
-      const sy = baseY - trunkH + rng.range(-2, 6);
-      b.capsule(sx, sy, sx + Math.cos(a) * len, sy + Math.sin(a) * len, 1.3, P.woodDark);
-      b.capsule(
-        sx + Math.cos(a) * len,
-        sy + Math.sin(a) * len,
-        sx + Math.cos(a + 0.6) * len * 1.4,
-        sy + Math.sin(a + 0.6) * len * 1.4,
-        1,
-        P.woodDark,
-      );
-    }
-    b.selOutline();
-    return b;
-  }
-
   if (kind === 'pine') {
-    let ty = baseY - trunkH + 4;
-    let rad = 17;
-    for (let layer = 0; layer < 4; layer++) {
-      for (let i = 0; i < 3; i++) {
-        b.ellipse(cx + rng.range(-2, 2), ty + i * 1.2, rad - i, rad * 0.4 - i * 0.3, i === 0 ? P.leafDark : P.leafDeep);
-      }
-      b.ellipse(cx - 2, ty - 1, rad * 0.6, rad * 0.22, P.leaf);
-      ty -= 9;
-      rad -= 3.6;
+    // A slim stem carries on up through the canopy, so the 1-2px band between
+    // two tiers shows trunk rather than sky.
+    const stemTop = 4;
+    for (let y = baseY - trunkH; y >= stemTop; y--) {
+      const t = (baseY - trunkH - y) / (baseY - trunkH - stemTop);
+      const wdt = t < 0.3 ? 3 : t < 0.72 ? 2 : 1;
+      const x0 = Math.round(cx - wdt / 2);
+      b.fillRect(x0, y, wdt, 1, P.wood);
+      b.set(x0, y, P.woodDark);
     }
-    b.ellipse(cx, ty + 4, 3, 5, P.leafDark);
+    // [bottom row, half width, height]; the gaps between one tier's apex and
+    // the next tier's bottom are the exposed trunk.
+    const tiers: [number, number, number][] = [
+      [45, 15.5, 11],
+      [32, 12.6, 9],
+      [20, 9.8, 8],
+      [10, 7.2, 6],
+      [5, 3.0, 3],
+    ];
+    for (const [bottom, half, hgt] of tiers) pineTier(b, cx, bottom, half * rng.range(0.86, 1.12), hgt, rng);
     b.selOutline();
-    b.rimLight(P.leafLight, 0.3);
     return b;
   }
 
-  // Oak canopy. Built in value layers with a single light direction (upper
-  // left) rather than concentric rings, which would read as a green pillow.
+  // Oak canopy. The outline is the whole job: five smooth ellipses in a ring
+  // give a cartoon cloud. Here a set of differently sized clumps interlock,
+  // 1-2px bumps are stamped along the resulting contour, and the interior is
+  // shaded in leaf clumps rather than concentric ellipses.
   const cy = baseY - trunkH - 8;
-  const blobs: [number, number, number][] = [
-    [cx, cy, 15],
-    [cx - 11, cy + 4, 10],
-    [cx + 11, cy + 4, 10],
-    [cx - 6, cy - 8, 9],
-    [cx + 7, cy - 7, 9],
-  ];
-  // 1. Full silhouette in the darkest value.
+  const blobs = (
+    [
+      [cx - 1, cy - 1, 12.5],
+      [cx - 11, cy + 2, 8.5],
+      [cx + 10, cy + 1, 9],
+      [cx - 6, cy - 9, 8],
+      [cx + 6, cy - 8, 7.5],
+      [cx - 14, cy - 4, 6],
+      [cx + 14, cy - 3, 6.5],
+      [cx - 4, cy + 7, 7.5],
+      [cx + 5, cy + 8, 6.5],
+    ] as [number, number, number][]
+  ).map(
+    ([bx, by, r]) =>
+      [bx + rng.range(-1.5, 1.5), by + rng.range(-1.5, 1.5), r * rng.range(0.86, 1.14)] as [number, number, number],
+  );
+
+  // 1. Silhouette, darkest value.
   for (const [bx, by, r] of blobs) b.ellipse(bx, by, r, r * 0.82, R.leaf[0]);
-  // 2. Body value, pushed up and left so the dark stays as a bottom-right rim.
-  for (const [bx, by, r] of blobs) b.ellipse(bx - r * 0.12, by - r * 0.16, r * 0.9, r * 0.72, R.leaf[1]);
-  for (const [bx, by, r] of blobs) b.ellipse(bx - r * 0.22, by - r * 0.3, r * 0.7, r * 0.54, R.leaf[2]);
-  // 3. Lit clumps: only on the upper-left of each blob, in repeating shapes.
-  for (const [bx, by, r] of blobs) {
-    const n = Math.round(r * 0.5);
-    for (let i = 0; i < n; i++) {
-      const a = rng.range(Math.PI * 0.8, Math.PI * 1.9);
-      const d = rng.range(0.2, 0.72);
-      const x = bx + Math.cos(a) * r * d;
-      const y = by + Math.sin(a) * r * 0.78 * d;
-      if (b.alphaAt(Math.round(x), Math.round(y)) < 200) continue;
-      b.ellipse(x, y, rng.range(1.6, 2.6), rng.range(1.2, 2), R.leaf[3]);
-      if (rng.chance(0.4)) b.ellipse(x - 0.8, y - 0.8, 1.2, 1, R.leaf[4]);
+
+  // 2. Ragged it up: 1-2px clusters hung off the contour. Without these the
+  //    join between two overlapping circles is still a smooth arc.
+  const contour: [number, number][] = [];
+  for (let y = 1; y < b.h - 1; y++) {
+    for (let x = 1; x < b.w - 1; x++) {
+      if (!solid(b, x, y) || !sameRGB(b.get(x, y), R.leaf[0])) continue;
+      if (solid(b, x - 1, y) && solid(b, x + 1, y) && solid(b, x, y - 1) && solid(b, x, y + 1)) continue;
+      contour.push([x, y]);
     }
   }
-  // 4. A few gaps where sky shows through, to break the solid mass.
-  for (let i = 0; i < 10; i++) {
-    const bx = cx + rng.range(-16, 16);
-    const by = cy + rng.range(-10, 8);
-    if (fbm(bx * 0.3, by * 0.3, 2) > 0.62) b.ellipse(bx, by, 1.6, 1.2, R.leaf[0]);
+  for (let i = 0; i < 24; i++) {
+    const [ex, ey] = contour[rng.int(0, contour.length - 1)];
+    b.ellipse(ex + rng.range(-1.2, 1.2), ey + rng.range(-1.2, 1.2), rng.range(0.7, 1.7), rng.range(0.7, 1.4), R.leaf[0]);
+  }
+
+  // 3. Body value, eroded from the bottom-right only: the dark survives as a
+  //    rim there and every bump keeps its dark edge.
+  const src = b.clone();
+  for (let y = 0; y < b.h; y++) {
+    for (let x = 0; x < b.w; x++) {
+      if (!solid(src, x, y) || !sameRGB(src.get(x, y), R.leaf[0])) continue;
+      if (!solid(src, x + 1, y) || !solid(src, x, y + 1) || !solid(src, x + 1, y + 1)) continue;
+      if (!solid(src, x + 2, y) || !solid(src, x, y + 2)) continue;
+      b.set(x, y, R.leaf[1]);
+    }
+  }
+  // 4. One straight-ish plane break for the lit upper mass — a plane, not a
+  //    ring; a ring inset from the outline is pillow shading.
+  for (let y = 0; y < b.h; y++) {
+    for (let x = 0; x < b.w; x++) {
+      if (!sameRGB(b.get(x, y), R.leaf[1]) || !solid(b, x, y)) continue;
+      if (y < cy + 2 - (x - cx) * 0.22) b.set(x, y, R.leaf[2]);
+    }
+  }
+  // 5. Lit clumps, 2-3px blocks in the upper left, a few with a 1px sparkle.
+  for (let i = 0; i < 26; i++) {
+    const x = Math.round(cx + rng.range(-17, 9));
+    const y = Math.round(cy + rng.range(-17, 3));
+    if (!sameRGB(b.get(x, y), R.leaf[2])) continue;
+    const cw = 2 + rng.int(0, 1);
+    for (let yy = y; yy < y + 1 + rng.int(0, 1); yy++) {
+      for (let xx = x; xx < x + cw; xx++) if (sameRGB(b.get(xx, yy), R.leaf[2])) b.set(xx, yy, R.leaf[3]);
+    }
+    if (rng.chance(0.35) && sameRGB(b.get(x, y), R.leaf[3])) b.set(x, y, R.leaf[4]);
+  }
+  // 6. The canopy sits *on* the trunk: darken where the two meet, otherwise the
+  //    tree looks like a balloon on a stick.
+  for (let y = cy; y < b.h; y++) {
+    for (let x = 0; x < b.w; x++) {
+      const c = b.get(x, y);
+      if (!solid(b, x, y) || !R.leaf.some((l) => sameRGB(l, c))) continue;
+      const dx = (x - cx) / 12;
+      const dy = (y - (cy + 15)) / 9;
+      if (dx * dx + dy * dy < 1) b.set(x, y, R.leaf[0]);
+    }
+  }
+  // 7. Two small gaps where sky shows through, so the mass isn't solid.
+  for (let i = 0; i < 2; i++) {
+    const gx = Math.round(cx + rng.range(-11, 11));
+    const gy = Math.round(cy + rng.range(-9, 2));
+    if (!solid(b, gx, gy)) continue;
+    for (let x = gx; x < gx + 3; x++) if (sameRGB(b.get(x, gy), R.leaf[2]) || sameRGB(b.get(x, gy), R.leaf[1])) b.set(x, gy, TRANSPARENT);
+    if (sameRGB(b.get(gx + 1, gy + 1), R.leaf[1])) b.set(gx + 1, gy + 1, TRANSPARENT);
   }
   b.selOutline();
   return b;
@@ -417,38 +631,111 @@ export function crystalClip(seed: number): Clip {
   return clip(bakeSheet(frames, 11, 24), frames.map((_, i) => i), 8);
 }
 
+/**
+ * Cut stump.
+ *
+ * Concentric rings of the same thickness centred on the same point make a
+ * doughnut. Real end grain is *eccentric* — the rings crowd to one side — and
+ * it is nearly always split by a radial crack running from the pith out to the
+ * bark. The side is vertical bark strips, which is also what stops the top
+ * ellipse from reading as a floating disc.
+ */
 export function stump(seed: number): PixelBuffer {
   const rng = new RNG(seed);
   const b = new PixelBuffer(20, 16);
   b.groundShadow(10, 14, 8, 2.5, 110);
-  b.fillRect(4, 6, 12, 8, P.woodDark);
-  b.ellipse(10, 12, 6, 2.4, P.woodDark);
-  b.ellipse(10, 6, 6, 3, P.wood);
-  b.ellipse(10, 6, 4, 1.9, P.woodPale);
-  b.ellipse(10, 6, 2, 0.9, P.wood);
-  b.set(10, 6, P.woodDark);
-  for (let y = 7; y < 14; y++) if (rng.chance(0.5)) b.set(rng.int(5, 14), y, P.woodPale);
+
+  // Side: vertical bark strips, bottom edge rounded so it sits on the ground.
+  for (let x = 4; x <= 16; x++) {
+    const u = (x - 10) / 6.6;
+    const bottom = Math.round(11 + 2 * Math.sqrt(Math.max(0, 1 - u * u)));
+    const strip = (x - 4) % 3;
+    const base = strip === 2 || rng.chance(0.16) ? R.wood[0] : x < 7 ? R.wood[2] : R.wood[1];
+    for (let y = 6; y <= bottom; y++) b.set(x, y, base);
+    b.set(x, bottom, R.wood[0]);
+  }
+
+  // Top face: each ring is a filled ellipse with the next one painted back on
+  // top in the face colour, which leaves a clean 1px line. The centres are
+  // *offset*, so the rings crowd to one side the way real end grain does.
+  b.ellipse(10, 6, 6, 3, R.wood[3]);
+  b.ellipse(10.6, 5.6, 4.4, 2.1, R.wood[1]);
+  b.ellipse(10.6, 5.6, 3.4, 1.5, R.wood[3]);
+  b.ellipse(9.5, 6.3, 2.0, 0.95, R.wood[1]);
+  b.ellipse(9.5, 6.3, 1.0, 0.35, R.wood[3]);
+  b.set(10, 6, R.wood[0]);
+  // Radial crack, pith to bark.
+  b.line(10, 6, 15, 8, R.wood[1]);
+  b.set(13, 7, R.wood[0]);
+  b.set(14, 7, R.wood[0]);
+
+  // Front lip: the lowest face pixel in each column separates face from side.
+  for (let x = 4; x <= 16; x++) {
+    for (let y = 9; y >= 3; y--) {
+      const c = b.get(x, y);
+      if (sameRGB(c, R.wood[3]) || sameRGB(c, R.wood[2])) {
+        if (y >= 6) b.set(x, y, R.wood[1]);
+        break;
+      }
+    }
+  }
   b.selOutline();
   return b;
 }
 
-/** Fallen log — doubles as a river crossing prop. */
+/**
+ * Fallen log.
+ *
+ * A flat brown rectangle is a pipe. What makes it a log is the end grain —
+ * a pale disc with rings on both cut faces — plus a barrel that steps down the
+ * wood ramp from a lit top edge to a dark underside, bark splits running with
+ * the grain (i.e. horizontally), and one knot where a branch was.
+ */
 export function log(seed: number): PixelBuffer {
   const rng = new RNG(seed);
   const b = new PixelBuffer(40, 16);
   b.groundShadow(20, 13, 17, 2.5, 110);
-  b.fillRect(3, 5, 34, 7, P.wood);
-  b.hline(3, 36, 5, P.woodLight);
-  b.hline(3, 36, 11, P.woodDark);
-  b.ellipse(4, 8.5, 2.4, 3.6, P.woodPale);
-  b.ellipse(4, 8.5, 1.2, 1.8, P.woodDark);
-  b.ellipse(36, 8.5, 2, 3.4, P.woodDark);
-  for (let i = 0; i < 14; i++) {
-    const x = rng.int(6, 34);
-    const y = rng.int(6, 11);
-    b.set(x, y, rng.chance(0.5) ? P.woodDark : P.woodLight);
+
+  // Barrel: flat bands down the ramp, no gradient.
+  const band = [3, 2, 2, 2, 1, 1, 1, 0, 0];
+  for (let x = 5; x <= 34; x++) for (let y = 4; y <= 12; y++) b.set(x, y, R.wood[band[y - 4]]);
+
+  // Bark splits: broken horizontal lines, one step darker than their row.
+  for (const [ly, lx0, lx1, col] of [
+    [5, 9, 20, R.wood[1]],
+    [7, 15, 28, R.wood[1]],
+    [9, 12, 22, R.wood[0]],
+    [10, 24, 32, R.wood[0]],
+  ] as [number, number, number, RGBA][]) {
+    for (let x = lx0; x <= lx1; x++) if ((x - lx0) % 6 !== 4) b.set(x, ly, col);
   }
-  for (let i = 0; i < 8; i++) b.set(rng.int(6, 34), 5, P.moss);
+
+  // Knot: the stub of a broken branch.
+  b.ellipse(25, 7.5, 2.4, 1.8, R.wood[1]);
+  b.ellipse(25, 7.5, 1.2, 0.9, R.wood[0]);
+  b.set(24, 6, R.wood[3]);
+  b.set(25, 6, R.wood[2]);
+
+  // Near cut face: bark rim, pale end grain, one off-centre ring, radial crack.
+  b.ellipse(5, 8, 2.7, 4.4, R.wood[1]);
+  b.ellipse(5, 8, 2.0, 3.7, R.wood[3]);
+  b.ellipse(5.3, 7.6, 1.3, 2.3, R.wood[1]);
+  b.ellipse(5.3, 7.6, 0.5, 1.3, R.wood[3]);
+  b.set(5, 8, R.wood[0]);
+  b.set(4, 10, R.wood[1]);
+  b.set(4, 11, R.wood[1]);
+  // Far cut face: same construction, one step down the ramp.
+  b.ellipse(35, 8, 2.5, 4.2, R.wood[0]);
+  b.ellipse(35, 8, 1.8, 3.4, R.wood[2]);
+  b.ellipse(35.2, 7.7, 1.0, 1.9, R.wood[0]);
+  b.set(35, 8, R.wood[2]);
+
+  // A little moss along the lit top edge.
+  for (let i = 0; i < 3; i++) {
+    const mx = rng.int(10, 30);
+    b.fillRect(mx, 4, 2, 1, R.leaf[1]);
+    b.set(mx + rng.int(0, 1), 5, R.leaf[0]);
+  }
   b.selOutline();
   return b;
 }
