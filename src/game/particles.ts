@@ -23,6 +23,18 @@ export interface Particle {
 export class Particles {
   readonly list: Particle[] = [];
 
+  /**
+   * Optional containment rect for indoor emitters (fireplaces, forges) so
+   * their sparks/embers don't drift out of the room and land on the black
+   * void outside its walls. Call `setBounds(room)` with the room's rect when
+   * the player enters an interior, and `setBounds(null)` when they leave.
+   */
+  bounds: { x0: number; y0: number; x1: number; y1: number } | null = null;
+
+  setBounds(b: { x0: number; y0: number; x1: number; y1: number } | null): void {
+    this.bounds = b;
+  }
+
   spawn(p: Partial<Particle> & { x: number; y: number }): void {
     if (this.list.length > 900) this.list.shift();
     this.list.push({
@@ -170,6 +182,13 @@ export class Particles {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.z += p.vz * dt;
+      if (
+        this.bounds &&
+        (p.x < this.bounds.x0 || p.x > this.bounds.x1 || p.y < this.bounds.y0 || p.y > this.bounds.y1)
+      ) {
+        this.list.splice(i, 1);
+        continue;
+      }
       if (p.z < 0) {
         p.z = 0;
         p.vz *= -0.35;

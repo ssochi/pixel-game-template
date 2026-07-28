@@ -176,9 +176,9 @@ export class Scene {
       this.light({
         x: x + w.x,
         y: y + w.y,
-        radius: 46,
-        color: [255, 206, 140, 255],
-        intensity: 0.55,
+        radius: 38,
+        color: [255, 196, 120, 255],
+        intensity: 0.32,
         flicker: 0.07,
         bloom: false,
       });

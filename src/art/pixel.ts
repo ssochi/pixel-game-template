@@ -459,7 +459,20 @@ export class PixelBuffer {
       d[i] = c[0];
       d[i + 1] = c[1];
       d[i + 2] = c[2];
-      d[i + 3] = a < 40 ? 0 : a < 150 ? 128 : 255;
+      if (a < 40) {
+        d[i + 3] = 0;
+      } else if (a < 150) {
+        // Mid-alpha pixels are either a baked-in ground shadow (dark, low
+        // alpha by design) or colour fringing left by ellipse/capsule/blend
+        // edges bleeding into the background. Shadows must stay
+        // semi-transparent or they'd vanish/turn into solid blobs; fringing
+        // has already been snapped onto the palette above, so it can just be
+        // solidified instead of erased.
+        const isDarkShadow = c[0] < 70 && c[1] < 70 && c[2] < 70;
+        d[i + 3] = isDarkShadow ? 128 : 255;
+      } else {
+        d[i + 3] = 255;
+      }
     }
   }
 

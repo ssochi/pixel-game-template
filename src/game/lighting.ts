@@ -61,11 +61,14 @@ function css(c: RGBA, a: number): string {
   return `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${Math.max(0, Math.min(1, a)).toFixed(3)})`;
 }
 
+/** Clamp to the 0..1 range. */
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
 export class Lighting {
   enabled = true;
   bloom = true;
-  /** Number of hard bands in each light's falloff. */
-  steps = 7;
 
   private map: HTMLCanvasElement;
   private mctx: CanvasRenderingContext2D;
@@ -109,13 +112,14 @@ export class Lighting {
   ): void {
     const r = Math.max(1, l.radius * scale);
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    // Stepped stops -> banded, pixel-art falloff.
-    for (let i = 0; i <= this.steps; i++) {
-      const t = i / this.steps;
-      const fall = Math.pow(1 - t, 2.1);
-      const off = Math.max(0, t - 0.0001);
-      g.addColorStop(off, css(l.color, alpha * fall * gain));
-      g.addColorStop(Math.min(1, t + 1 / this.steps - 0.0001), css(l.color, alpha * fall * gain));
+    // Continuous quadratic falloff: alpha ~ (1-t)^2. The pixel look comes
+    // from the light map itself being a 448x252 low-res buffer, not from
+    // banding the gradient into hard rings.
+    const QUAD_STOPS = 5;
+    for (let i = 0; i <= QUAD_STOPS; i++) {
+      const t = i / QUAD_STOPS;
+      const fall = (1 - t) * (1 - t);
+      g.addColorStop(t, css(l.color, alpha * fall * gain));
     }
     ctx.fillStyle = g;
     if (l.cone !== undefined && l.dir !== undefined) {
@@ -200,19 +204,26 @@ export class Lighting {
     m.fillStyle = `rgb(${(255 * k) | 0},${(255 * k) | 0},${(255 * k) | 0})`;
     m.fillRect(0, 0, w, h);
 
+    // Ambient darkness factor: lights fully fade out in broad daylight and
+    // reach full strength once dusk gets going, so the player's own lamp
+    // isn't a visible halo at high noon.
+    const dayK = clamp01((1 - amb.strength) * 2.4);
+
     m.globalCompositeOperation = 'lighter';
-    for (const l of lights) {
-      const x = Math.round(l.x - camX);
-      const y = Math.round(l.y - camY);
-      if (x < -l.radius || y < -l.radius || x > w + l.radius || y > h + l.radius) continue;
-      this.paint(m, l, x, y, this.lightAlpha(l, time), 1, 1);
+    if (dayK > 0) {
+      for (const l of lights) {
+        const x = Math.round(l.x - camX);
+        const y = Math.round(l.y - camY);
+        if (x < -l.radius || y < -l.radius || x > w + l.radius || y > h + l.radius) continue;
+        this.paint(m, l, x, y, this.lightAlpha(l, time) * dayK, 1, 1);
+      }
     }
 
     ctx.globalCompositeOperation = 'multiply';
     ctx.drawImage(this.map, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
 
-    if (!this.bloom) return;
+    if (!this.bloom || dayK <= 0) return;
     // Additive core glow, strongest when the scene is dark.
     const bloomK = Math.max(0, 1 - amb.strength) * 0.85 + 0.12;
     ctx.globalCompositeOperation = 'lighter';
@@ -221,7 +232,7 @@ export class Lighting {
       const x = Math.round(l.x - camX);
       const y = Math.round(l.y - camY);
       if (x < -l.radius || y < -l.radius || x > w + l.radius || y > h + l.radius) continue;
-      this.paint(ctx, l, x, y, this.lightAlpha(l, time) * bloomK * 0.5, 0.55, 1);
+      this.paint(ctx, l, x, y, this.lightAlpha(l, time) * dayK * bloomK * 0.5, 0.55, 1);
     }
     ctx.globalCompositeOperation = 'source-over';
   }
