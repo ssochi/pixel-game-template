@@ -178,6 +178,17 @@ function back(c: RGBA): RGBA {
   return shade(c, -0.28);
 }
 
+/**
+ * Move a colour `n` whole steps along its own ramp.
+ *
+ * `shade()` takes a continuous amount and rounds to `t * 3.2` steps, so 0.31
+ * per step is the value that lands exactly one swatch away — going through this
+ * helper keeps the legs on the ramp instead of drifting off it.
+ */
+function step(c: RGBA, n: number): RGBA {
+  return n === 0 ? c : shade(c, n * 0.31);
+}
+
 function drawLeg(
   buf: PixelBuffer,
   hx: number,
@@ -185,10 +196,12 @@ function drawLeg(
   fx: number,
   fy: number,
   s: Skin,
-  isBack: boolean,
+  /** Whole ramp steps to shift this leg by. The near leg runs a step up the
+   *  ramp and the far leg a step down, so the two never merge into one mass. */
+  tone: number,
 ): void {
-  const pants = isBack ? back(s.pants) : s.pants;
-  const boot = isBack ? back(s.boot) : s.boot;
+  const pants = step(s.pants, tone);
+  const boot = step(s.boot, tone);
   const kneeX = (hx + fx) / 2 + (fx - hx) * 0.15;
   const kneeY = (hy + fy) / 2;
   buf.capsule(hx, hy, kneeX, kneeY, 1.6, pants);
@@ -197,8 +210,15 @@ function drawLeg(
   // enough to read as footwear rather than as the end of the trouser.
   const bx = Math.round(fx);
   const by = Math.round(fy);
-  const bootDark = isBack ? back(s.bootDark) : s.bootDark;
-  buf.fillRect(bx - 2, by - 3, 4, 1, isBack ? back(s.boot) : s.boot); // cuff
+  const bootDark = step(s.bootDark, tone);
+  // One dark row of trouser right above the cuff. Without it the pants and the
+  // boot are two neighbouring ramp steps of the same value block and the leg
+  // reads as a single tube from hip to floor.
+  const hem = step(s.pantsDark, Math.min(0, tone));
+  for (let x = bx - 3; x <= bx + 3; x++) {
+    if (buf.alphaAt(x, by - 4) > 200) buf.set(x, by - 4, hem);
+  }
+  buf.fillRect(bx - 2, by - 3, 4, 1, boot); // cuff
   buf.fillRect(bx - 2, by - 2, 5, 2, boot);
   buf.hline(bx - 2, bx + 2, by - 1, bootDark);
   buf.set(bx - 2, by - 2, bootDark);
@@ -421,6 +441,14 @@ export function drawHumanoid(s: Skin, dir: Dir, p: Pose, flap = 0): PixelBuffer 
   const legSpread = dir === 1 ? 1.2 : 2.4;
   const armSpread = dir === 1 ? 2.2 : 4.6;
 
+  // Legs used to sit a single ramp step apart at the bottom of the ramp, which
+  // put everything below the belt in the two darkest swatches: the near leg,
+  // the far leg and the boots all read as one dark trouser blob. The near leg
+  // now runs a step *up* the ramp — in profile the far leg drops a step as well,
+  // so the pair is two steps apart and the stride is legible.
+  const nearTone = 1;
+  const farTone = dir === 1 ? -1 : 0;
+
   // Back limbs first.
   drawLeg(
     buf,
@@ -429,7 +457,7 @@ export function drawHumanoid(s: Skin, dir: Dir, p: Pose, flap = 0): PixelBuffer 
     cx - legSpread + p.legBX,
     footY + p.legBY,
     s,
-    true,
+    farTone,
   );
   drawArm(
     buf,
@@ -442,7 +470,7 @@ export function drawHumanoid(s: Skin, dir: Dir, p: Pose, flap = 0): PixelBuffer 
   );
 
   // Front leg + torso.
-  drawLeg(buf, cx + legSpread, hipY, cx + legSpread + p.legAX, footY + p.legAY, s, false);
+  drawLeg(buf, cx + legSpread, hipY, cx + legSpread + p.legAX, footY + p.legAY, s, nearTone);
   if (dir !== 1) {
     // Front and back views: cut a one-pixel dark seam between the legs, or
     // they merge into a single trouser-shaped mass.
@@ -526,10 +554,20 @@ function walkPoses(frames = 8, amp = 1): Pose[] {
         crouch: run ? 1 : 0,
         lean: run ? 1.6 : 0.4,
         legAX: s * 2.8 * amp,
-        // The trailing leg lifts its heel just after it leaves the ground.
-        legAY: -Math.max(0, Math.sin(ph - 0.6)) * 2.1 * amp,
+        // A foot only leaves the ground behind you. The lift window is the half
+        // cycle the leg spends swinging from full rear extension back to the
+        // front — it peaks just past the push-off and is flat on the floor for
+        // the whole of the forward reach and the stance that follows.
+        //
+        // This was `sin(ph - 0.6)`, which is the same window shifted by pi: the
+        // heel came up while the leg was reaching *forward* and planted while it
+        // was travelling *backward*, which is exactly what walking backwards
+        // looks like. Every other channel (arm counter-swing, twist, head lag)
+        // was already correct, so the sprite read as a head facing one way on a
+        // body walking the other.
+        legAY: -Math.max(0, Math.sin(ph + Math.PI - 0.6)) * 2.1 * amp,
         legBX: -s * 2.8 * amp,
-        legBY: -Math.max(0, Math.sin(ph + Math.PI - 0.6)) * 2.1 * amp,
+        legBY: -Math.max(0, Math.sin(ph - 0.6)) * 2.1 * amp,
         armAX: -s * 2 * amp,
         armAY: -stride * 0.9,
         armBX: s * 2 * amp,
@@ -569,6 +607,76 @@ function attackPoses(): Pose[] {
     pose({ lean: 2.5, armAX: 6, armAY: -1, twist: 2.2, legAX: 2.5 }),
     pose({ lean: 1, armAX: 3, armAY: 0, twist: 1, legAX: 1 }),
     pose({ lean: 0, armAX: 1, armAY: 0, twist: 0 }),
+  ];
+}
+
+/**
+ * Tool actions.
+ *
+ * One generic punch for every implement made the hoe, the axe, the can and the
+ * scythe indistinguishable — the tool sprite rode a different arc but the body
+ * underneath did the same thing, so nothing read as *work*. These are four
+ * six-frame sets on the same duration as the attack clip, so `Player` can swap
+ * one in for another purely on what is in hand.
+ *
+ * They are matched frame-for-frame to the tool arcs in `player.ts`: the impact
+ * frame of the overhead chop is frame 3, which is where the blade reaches the
+ * ground, and that frame is the only one that sinks (`crouch` + `bob`).
+ */
+
+/** Overhead chop — hoe, axe, pick. Wind up over the head, drop it, recover. */
+function overheadPoses(): Pose[] {
+  return [
+    pose({ lean: -1, armAX: 1, armAY: -4.5, twist: -1, headX: -0.4, headY: -0.5 }),
+    pose({ lean: -2, armAX: 0.5, armAY: -6, twist: -1.6, headX: -1, headY: -0.5 }),
+    pose({ lean: 0.5, armAX: 3, armAY: -3, twist: 0.6, legAX: 0.5 }),
+    // Impact: the whole body drops onto the blow.
+    pose({ lean: 2, armAX: 4.5, armAY: 1.5, twist: 1.8, legAX: 1.5, crouch: 1, bob: 1, headY: 0.5 }),
+    pose({ lean: 1.5, armAX: 4, armAY: 1, twist: 1.2, legAX: 1, crouch: 1, bob: 0.5 }),
+    pose({ lean: 0.5, armAX: 2, armAY: -0.5, twist: 0.4 }),
+  ];
+}
+
+/**
+ * Watering. Deliberately almost still: you do not swing a full can, you hold it
+ * out and wait. All the motion in this action belongs to the water.
+ */
+function waterPoses(): Pose[] {
+  return [
+    pose({ lean: 0.6, armAX: 2, armAY: -1.5, twist: 0.4 }),
+    pose({ lean: 1.2, armAX: 3.5, armAY: -1, twist: 0.8, headY: 0.5 }),
+    pose({ lean: 1.4, armAX: 4, armAY: -0.5, twist: 1, headY: 0.5, crouch: 1 }),
+    pose({ lean: 1.4, armAX: 4, armAY: -0.5, twist: 1, headY: 0.5, crouch: 1 }),
+    pose({ lean: 1.3, armAX: 3.8, armAY: -0.5, twist: 1, headY: 0.5, crouch: 1 }),
+    pose({ lean: 0.9, armAX: 3, armAY: -1, twist: 0.6 }),
+  ];
+}
+
+/**
+ * Scythe. A flat horizontal pass: the hips and shoulders lead, the arm stays
+ * low the whole way and there is no vertical drop at all — the difference
+ * between reaping and chopping is entirely in the plane of the swing.
+ */
+function sweepPoses(): Pose[] {
+  return [
+    pose({ lean: -1, armAX: -3, armAY: 2, twist: -2, headX: -0.6 }),
+    pose({ lean: -1.2, armAX: -3.5, armAY: 2.2, twist: -2.2, headX: -1, crouch: 1 }),
+    pose({ lean: 0.5, armAX: 0.5, armAY: 2.5, twist: 0, crouch: 1 }),
+    pose({ lean: 1.5, armAX: 4, armAY: 2.2, twist: 2, legAX: 1, crouch: 1 }),
+    pose({ lean: 1.2, armAX: 4.5, armAY: 1.5, twist: 2.2, legAX: 1 }),
+    pose({ lean: 0.4, armAX: 2, armAY: 0.5, twist: 0.8 }),
+  ];
+}
+
+/** Casting a rod: load back over the shoulder for two frames, then whip. */
+function castPoses(): Pose[] {
+  return [
+    pose({ lean: -2, armAX: -2, armAY: -4, twist: -1.5, headX: -0.5 }),
+    pose({ lean: -2.5, armAX: -3, armAY: -4.5, twist: -2, headX: -1, legBX: -1 }),
+    pose({ lean: 2, armAX: 4, armAY: -3, twist: 1.5, legAX: 1 }),
+    pose({ lean: 2.5, armAX: 5, armAY: -2.5, twist: 2, legAX: 1.5, bob: -0.5 }),
+    pose({ lean: 1.5, armAX: 4, armAY: -2, twist: 1.2, legAX: 1 }),
+    pose({ lean: 0.8, armAX: 3, armAY: -1.5, twist: 0.6 }),
   ];
 }
 
@@ -638,9 +746,18 @@ export interface CharacterAnims {
   death: Clip[];
   /** Present on NPCs: a looping work motion. */
   work?: Clip[];
+  /**
+   * Per-tool swing variants, indexed by dir like every other set. They all run
+   * for exactly as long as `attack`, so the caller can substitute one without
+   * touching any of the timing that hangs off the attack clip.
+   */
+  swings?: Record<SwingKind, Clip[]>;
   /** Every baked sheet, for the asset gallery. */
   sheets: { name: string; dir: Dir; sheet: Sheet }[];
 }
+
+/** The four shapes a tool action can take. */
+export type SwingKind = 'over' | 'water' | 'sweep' | 'cast';
 
 /**
  * Villagers only ever idle and walk, so baking their run/attack/death sets
@@ -674,12 +791,19 @@ export function bakeCharacter(s: Skin): CharacterAnims {
   const walkP = walkPoses(8, 1);
   const runP = walkPoses(8, 1.75);
   const atkP = attackPoses();
+  const swingP: Record<SwingKind, Pose[]> = {
+    over: overheadPoses(),
+    water: waterPoses(),
+    sweep: sweepPoses(),
+    cast: castPoses(),
+  };
 
   const idle: Clip[] = [];
   const walk: Clip[] = [];
   const run: Clip[] = [];
   const attack: Clip[] = [];
   const death: Clip[] = [];
+  const swings: Record<SwingKind, Clip[]> = { over: [], water: [], sweep: [], cast: [] };
   const sheets: { name: string; dir: Dir; sheet: Sheet }[] = [];
 
   for (const d of dirs) {
@@ -704,8 +828,16 @@ export function bakeCharacter(s: Skin): CharacterAnims {
       { name: 'attack', dir: d, sheet: sa },
       { name: 'death', dir: d, sheet: sd },
     );
+    for (const k of Object.keys(swingP) as SwingKind[]) {
+      // Same frame count and fps as `attack`: `Player` swaps these in for it.
+      const ss = bake(s, d, swingP[k], k === 'water' ? 0.4 : 1.2);
+      swings[k][d] = clip(ss, range(ss.count), 16, false);
+      // Front and profile only in the gallery — twelve more back views would
+      // bury the sets you actually inspect.
+      if (d !== 2) sheets.push({ name: `swing ${k}`, dir: d, sheet: ss });
+    }
   }
-  return { idle, walk, run, attack, death, sheets };
+  return { idle, walk, run, attack, death, swings, sheets };
 }
 
 function range(n: number): number[] {

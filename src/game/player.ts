@@ -10,17 +10,73 @@
  * is why they can point anywhere without needing 8 more baked directions.
  */
 import type { Assets } from '../art/assets';
-import type { Dir } from '../art/character';
+import type { Dir, SwingKind } from '../art/character';
 import { P } from '../art/palette';
 import { clipDuration, clipFinished, drawClip, drawFrame, type Clip, type Sheet } from '../art/sheet';
 import type { Input } from '../engine/input';
 import type { Camera } from '../engine/screen';
+import type { ItemUse } from './inventory';
 import type { Light } from './lighting';
 import type { Particles } from './particles';
 import type { Solid } from './scene';
 import { blocksMovement, isWater, onBridge } from './terrain';
 
 export type PlayerState = 'idle' | 'walk' | 'run' | 'attack' | 'death';
+
+/**
+ * Which body action each tool plays. Anything not listed here (seeds, produce,
+ * the gun) falls back to the generic attack clip.
+ */
+const SWING_OF: Partial<Record<ItemUse, SwingKind>> = {
+  till: 'over',
+  chop: 'over',
+  mine: 'over',
+  water: 'water',
+  cut: 'sweep',
+  fish: 'cast',
+};
+
+/**
+ * Where the held sprite sits this frame: a rotation plus a pixel offset from
+ * the body. Keeping the two apart is what lets the watering can slide out along
+ * the aim while tipping to a completely different angle.
+ */
+interface HeldPose {
+  rot: number;
+  ox: number;
+  oy: number;
+}
+
+/**
+ * Overhead chop. Finish the lift, then *accelerate* down — a linear sweep has
+ * no weight, and the whole read of an axe is that the head falls faster than
+ * the hands do. `up`/`down` are offsets from the aim, negative being raised.
+ */
+function chopArc(t: number, up: number, down: number): number {
+  if (t < 0.3) return up * (0.72 + 0.28 * (t / 0.3));
+  if (t < 0.62) {
+    const k = (t - 0.3) / 0.32;
+    return up + (down - up) * k * k;
+  }
+  // Peel it back off the ground for the recovery.
+  const k = (t - 0.62) / 0.38;
+  return down + (up * 0.35 - down) * k * k;
+}
+
+/** Scythe: hold the wind-up, then one even pass. Reaping has no impact frame. */
+function sweepArc(t: number): number {
+  if (t < 0.22) return -1.4;
+  const k = Math.min(1, (t - 0.22) / 0.45);
+  return -1.4 + 2.8 * (k * k * (3 - 2 * k));
+}
+
+/** Cast: load back for ~0.12s, then whip out to just above the aim line. */
+function castArc(t: number): number {
+  const load = 0.32;
+  if (t < load) return -2.2 - 0.25 * (t / load);
+  const k = Math.min(1, (t - load) / 0.3);
+  return -2.45 + 2.15 * (k * (2 - k));
+}
 
 export interface Bullet {
   x: number;
@@ -73,6 +129,7 @@ export class Player {
 
   get clip(): Clip {
     const s = this.forced ?? this.state;
+    if (s === 'attack') return this.attackClip();
     const set =
       s === 'idle'
         ? this.a.hero.idle
@@ -80,10 +137,21 @@ export class Player {
           ? this.a.hero.walk
           : s === 'run'
             ? this.a.hero.run
-            : s === 'attack'
-              ? this.a.hero.attack
-              : this.a.hero.death;
+            : this.a.hero.death;
     return set[this.dir];
+  }
+
+  /**
+   * The body action for whatever is in hand. Every variant is baked to the same
+   * length as the plain attack clip, so everything hung off the attack timing —
+   * the facing lock, the "is the swing over yet" test, the tool arc's own `t` —
+   * keeps working whichever one is playing.
+   */
+  private attackClip(): Clip {
+    const kind = this.heldUse ? SWING_OF[this.heldUse] : undefined;
+    const swings = this.a.hero.swings;
+    if (kind && swings && this.heldSheet) return swings[kind][this.dir];
+    return this.a.hero.attack[this.dir];
   }
 
   private setState(s: PlayerState): void {
@@ -174,7 +242,7 @@ export class Player {
 
     // --- state -------------------------------------------------------------
     const moving = Math.hypot(this.vx, this.vy) > 8;
-    if (this.state === 'attack' && !clipFinished(this.a.hero.attack[this.dir], this.animT)) {
+    if (this.state === 'attack' && !clipFinished(this.attackClip(), this.animT)) {
       // hold the attack pose
     } else if (moving) {
       this.setState(running ? 'run' : 'walk');
@@ -227,7 +295,7 @@ export class Player {
    */
   private faceAim(): void {
     this.face(Math.cos(this.aim), Math.sin(this.aim));
-    this.faceLockT = clipDuration(this.a.hero.attack[this.dir]);
+    this.faceLockT = clipDuration(this.attackClip());
   }
 
   /** Play the tool-swing animation. Called when a tool is used. */
@@ -355,16 +423,16 @@ export class Player {
     // gun. Otherwise the tool stays in front: tucking it behind during the
     // wind-up hides a thin hoe or scythe behind the torso entirely.
     const aimingUp = this.dir === 2;
-    const ang = this.heldAngle();
+    const hp = this.heldPose();
 
     if (aimingUp) {
       this.drawGun(ctx, px, py);
-      this.drawHeld(ctx, px, py, ang);
+      this.drawHeld(ctx, px, py, hp);
     }
     drawClip(ctx, this.clip, this.animT, px, py, this.flip);
     if (!aimingUp) {
       this.drawGun(ctx, px, py);
-      this.drawHeld(ctx, px, py, ang);
+      this.drawHeld(ctx, px, py, hp);
     }
   }
 
@@ -377,37 +445,90 @@ export class Player {
    * hoeing does not read as punching the dirt.
    */
   heldSheet: Sheet | null = null;
+  /**
+   * What the held item *does*. The four tool actions are chosen off this: a can
+   * is poured, a scythe is swept, an axe is dropped, a rod is cast. Set from the
+   * inventory alongside `heldSheet`.
+   */
+  heldUse: ItemUse | null = null;
   /** True while a line is out: the rod is then held out steady, not swung. */
   fishingActive = false;
 
   /**
-   * Where the held tool is pointing this frame, or null when there is nothing
-   * to draw. A swing rides a short arc — wind up behind the shoulder, come down
-   * past the aim — while a cast rod just points at the float.
+   * Where the held tool sits this frame, or null when there is nothing to draw.
+   *
+   * All four arcs are written as an offset from the aim, negative meaning
+   * raised, and are mirrored wholesale when facing left so a chop still falls
+   * *downwards* instead of scooping up like a golf shot.
    */
-  private heldAngle(): number | null {
+  private heldPose(): HeldPose | null {
     if (!this.heldSheet || this.state === 'death') return null;
-    if (this.fishingActive) return this.aim;
+    const mir = Math.cos(this.aim) < 0 ? -1 : 1;
+    // A line already in the water: hold the rod out steady, pointing at the
+    // float. Nothing about the cast animation applies any more.
+    if (this.fishingActive) return { rot: this.aim, ox: Math.cos(this.aim) * 7, oy: Math.sin(this.aim) * 7 };
     if (this.state !== 'attack') return null;
-    const t = Math.max(0, Math.min(1, this.animT / clipDuration(this.a.hero.attack[this.dir])));
-    // Mirrored on the left so that swing chops downwards too, rather than
-    // scooping up like a golf shot.
-    return this.aim + (Math.cos(this.aim) < 0 ? -1 : 1) * (-1.2 + t * 1.8);
+    const t = Math.max(0, Math.min(1, this.animT / clipDuration(this.attackClip())));
+
+    if (this.heldUse === 'water') {
+      // The can does not swing at all. It slides out in front of the body and
+      // tips until the spout points at the ground, then stays there — the
+      // motion in this action is the water, not the arm.
+      const k = Math.min(1, t / 0.25);
+      const reach = 5 + 3 * k;
+      return {
+        rot: this.aim + mir * 1.0 * k,
+        ox: Math.cos(this.aim) * reach,
+        oy: Math.sin(this.aim) * reach + 1,
+      };
+    }
+
+    if (this.heldUse === 'cut') {
+      // A scythe cuts on the horizontal. Squashing the hand path to a flat
+      // ellipse and dropping it below the fist is what sells the blade as
+      // travelling *around* the body rather than down through it.
+      const d = sweepArc(t);
+      const rot = this.aim + mir * d;
+      return { rot, ox: Math.cos(rot) * 8, oy: Math.sin(rot) * 3.5 + 2 };
+    }
+
+    let d: number;
+    switch (this.heldUse) {
+      case 'till':
+        d = chopArc(t, -2.0, 0.5);
+        break;
+      // The axe travels on a flatter arc than the hoe: it is swung at a trunk
+      // in front of you, not lifted over your head and dropped on the dirt.
+      case 'chop':
+        d = chopArc(t, -1.7, 0.35);
+        break;
+      case 'mine':
+        d = chopArc(t, -2.0, 0.45);
+        break;
+      case 'fish':
+        d = castArc(t);
+        break;
+      default:
+        d = -1.2 + t * 1.8;
+        break;
+    }
+    const rot = this.aim + mir * d;
+    return { rot, ox: Math.cos(rot) * 7, oy: Math.sin(rot) * 7 };
   }
 
-  /** The tool itself, pivoted in the hand at `ang`. */
-  private drawHeld(ctx: CanvasRenderingContext2D, px: number, py: number, ang: number | null): void {
+  /** The tool itself, pivoted in the hand. */
+  private drawHeld(ctx: CanvasRenderingContext2D, px: number, py: number, hp: HeldPose | null): void {
     const sheet = this.heldSheet;
-    if (!sheet || ang === null) return;
+    if (!sheet || !hp) return;
     // Whether the pose is mirrored is decided by the aim, not by the live
     // angle: taken per-frame it would pop mid-swing as the tool crossed the
-    // vertical and `ang` changed sign.
+    // vertical and the angle changed sign.
     const mirrored = Math.cos(this.aim) < 0;
 
     const handY = py - 12;
     ctx.save();
-    ctx.translate(px + Math.cos(ang) * 7, handY + Math.sin(ang) * 7);
-    ctx.rotate(ang);
+    ctx.translate(px + hp.ox, handY + hp.oy);
+    ctx.rotate(hp.rot);
     // Flip so the blade stays above the handle when the tool points left.
     // Mirroring here — before the PI/4 — leaves the tip on `ang`; it only
     // changes which way up the tool hangs off it.

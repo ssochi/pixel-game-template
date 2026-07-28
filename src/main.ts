@@ -529,6 +529,9 @@ function start(): void {
     // Only tools get drawn: a turnip in the fist reads as a bug, not a feature.
     const inHand = inv.held;
     player.heldSheet = inHand?.tool ? iconFor(assets, inHand.id) : null;
+    // What it is for, not just what it looks like: the swing animation is
+    // picked off this, so a can is poured and a scythe is swept.
+    player.heldUse = inHand?.use ?? null;
     player.fishingActive = fishing.active;
 
     // The shop menu takes all input while it is open — before the gallery
