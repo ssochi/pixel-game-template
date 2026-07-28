@@ -443,13 +443,18 @@ export function millstoneClip(): Clip {
     b.hline(6, 27, 22, R.wood[2]);
     // Bed stone: the rim first, then the top face two pixels higher. That
     // offset is the stone's thickness — there is no other way to say it here.
+    // Both discs are held in the *dark* half of the stone ramp: the mill floor
+    // is itself stone, so a bright millstone standing on it has no silhouette
+    // at all. The separation between the two stones has to come from one ramp
+    // step and from the rims, not from making the whole thing pale.
     b.ellipse(cx, 15, 15, 7, R.stone[0]);
-    b.ellipse(cx, 13, 15, 7, R.stone[2]);
-    b.ellipse(cx - 1, 12.5, 13, 6, R.stone[3]);
-    // Runner stone: smaller and higher, so the pair reads as two stones.
-    b.ellipse(cx, 10, 11, 5.5, R.stone[1]);
-    b.ellipse(cx, 8, 11, 5.5, R.stone[3]);
-    b.ellipse(cx - 1, 7.5, 9.5, 4.5, R.stone[4]);
+    b.ellipse(cx, 13, 15, 7, R.stone[1]);
+    b.ellipse(cx - 1, 12.5, 13, 6, R.stone[2]);
+    // Runner stone: smaller, higher, and one step lighter than the bed.
+    b.ellipse(cx, 10, 11, 5.5, R.stone[0]);
+    b.ellipse(cx, 8, 11, 5.5, R.stone[2]);
+    b.ellipse(cx - 2, 7, 8, 3.6, R.stone[3]);
+    b.ellipse(cx - 3, 6.5, 5, 2.2, R.stone[4]);
     // Dressing furrows, straight grooves radiating from the eye. Squashed on
     // the vertical axis by the same amount as the disc.
     const rot = f * (Math.PI / 6);
@@ -457,7 +462,7 @@ export function millstoneClip(): Clip {
       const a = rot + (i / 6) * Math.PI * 2;
       const ca = Math.cos(a);
       const sa = Math.sin(a) * 0.5;
-      b.line(cx + ca * 3, 8 + sa * 3, cx + ca * 9, 8 + sa * 9, R.stone[1]);
+      b.line(cx + ca * 3.5, 8 + sa * 3.5, cx + ca * 10, 8 + sa * 10, R.stone[0]);
     }
     // The eye, with the iron rynd bridged across it.
     b.ellipse(cx, 8, 2.4, 1.5, R.night[1]);
@@ -470,8 +475,12 @@ export function millstoneClip(): Clip {
     b.capsule(hx, hy, hx, hy - 6, 1.2, R.wood[2]);
     b.set(Math.round(hx), Math.round(hy) - 7, R.wood[3]);
     b.set(Math.round(hx) + 1, Math.round(hy) - 2, R.wood[0]);
-    // Meal spilt round the base.
-    for (let i = 0; i < 7; i++) b.set(7 + i * 3, 26 + ((i + f) % 2), R.paper[f ? 3 : 4]);
+    // Meal spilt round the base, in 2px dashes — single specks on top of the
+    // contact shadow just read as dirt on the screen.
+    for (let i = 0; i < 5; i++) {
+      const mx = 7 + i * 5 + ((i + f) % 2);
+      b.hline(mx, mx + 1, 26 + ((i + f) % 2), R.paper[f ? 3 : 4]);
+    }
     b.selOutline();
     frames.push(b);
   }

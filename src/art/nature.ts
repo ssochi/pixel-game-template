@@ -627,51 +627,46 @@ export function crystalClip(seed: number): Clip {
 /**
  * Cut stump.
  *
- * Concentric rings of the same thickness centred on the same point make a
- * doughnut. Real end grain is *eccentric* — the rings crowd to one side — and
- * it is nearly always split by a radial crack running from the pith out to the
- * bark. The side is vertical bark strips, which is also what stops the top
- * ellipse from reading as a floating disc.
+ * End grain is a place where the generated ellipse loses: at r=6 a ring drawn
+ * by a rasteriser is either a doughnut (perfectly concentric, even weight) or a
+ * broken smear. So the whole face is hand-placed. What sells it is that the
+ * rings are *eccentric* — crowded to one side of the pith — and that a radial
+ * crack runs from the pith out through the bark. The side is vertical bark
+ * strips, which is also what stops the top ellipse reading as a floating disc.
+ *
+ *   b bark rim   p heartwood   r growth ring   k pith / crack
+ *   L lit bark   s bark        d bark seam & ground contact
  */
+const STUMP_ART = [
+  '...bppppppb...',
+  '.bppprrrrrppb.',
+  'bppprpkpprpppb',
+  'bppprppkprpppb',
+  '.bppprrrkkppb.',
+  '...bbbbbbbb...',
+  'dLLdssdssdssdd',
+  'dLLddsdssdssdd',
+  '.LLdssdssdssd.',
+  '.Lddssdssdssd.',
+  '...dddddddd...',
+];
+
 export function stump(seed: number): PixelBuffer {
   const rng = new RNG(seed);
   const b = new PixelBuffer(20, 16);
   b.groundShadow(10, 14, 8, 2.5, 110);
-
-  // Side: vertical bark strips, bottom edge rounded so it sits on the ground.
-  for (let x = 4; x <= 16; x++) {
-    const u = (x - 10) / 6.6;
-    const bottom = Math.round(11 + 2 * Math.sqrt(Math.max(0, 1 - u * u)));
-    const strip = (x - 4) % 3;
-    const base = strip === 2 || rng.chance(0.16) ? R.wood[0] : x < 7 ? R.wood[2] : R.wood[1];
-    for (let y = 6; y <= bottom; y++) b.set(x, y, base);
-    b.set(x, bottom, R.wood[0]);
-  }
-
-  // Top face: each ring is a filled ellipse with the next one painted back on
-  // top in the face colour, which leaves a clean 1px line. The centres are
-  // *offset*, so the rings crowd to one side the way real end grain does.
-  b.ellipse(10, 6, 6, 3, R.wood[3]);
-  b.ellipse(10.6, 5.6, 4.4, 2.1, R.wood[1]);
-  b.ellipse(10.6, 5.6, 3.4, 1.5, R.wood[3]);
-  b.ellipse(9.5, 6.3, 2.0, 0.95, R.wood[1]);
-  b.ellipse(9.5, 6.3, 1.0, 0.35, R.wood[3]);
-  b.set(10, 6, R.wood[0]);
-  // Radial crack, pith to bark.
-  b.line(10, 6, 15, 8, R.wood[1]);
-  b.set(13, 7, R.wood[0]);
-  b.set(14, 7, R.wood[0]);
-
-  // Front lip: the lowest face pixel in each column separates face from side.
-  for (let x = 4; x <= 16; x++) {
-    for (let y = 9; y >= 3; y--) {
-      const c = b.get(x, y);
-      if (sameRGB(c, R.wood[3]) || sameRGB(c, R.wood[2])) {
-        if (y >= 6) b.set(x, y, R.wood[1]);
-        break;
-      }
-    }
-  }
+  const art = parseArt(STUMP_ART, {
+    b: R.wood[1],
+    p: R.wood[3],
+    r: R.wood[1],
+    k: R.wood[0],
+    L: R.wood[2],
+    s: R.wood[1],
+    d: R.wood[0],
+  });
+  b.blit(art, 3, 3);
+  // Per-instance bark nicks so a row of stumps isn't stamped out.
+  for (let i = 0; i < 3; i++) b.set(rng.int(4, 15), rng.int(10, 12), R.wood[0]);
   b.selOutline();
   return b;
 }
@@ -684,6 +679,30 @@ export function stump(seed: number): PixelBuffer {
  * wood ramp from a lit top edge to a dark underside, bark splits running with
  * the grain (i.e. horizontally), and one knot where a branch was.
  */
+const LOG_END = [
+  '..b..',
+  '.bpb.',
+  'bprpb',
+  'brppb',
+  'brkpb',
+  'brppb',
+  'bprkb',
+  '.bbb.',
+  '..b..',
+];
+
+const LOG_END_FAR = [
+  '..b..',
+  '.bpb.',
+  'bprpb',
+  'bpprb',
+  'bpkrb',
+  'bpprb',
+  'bprpb',
+  '.bbb.',
+  '..b..',
+];
+
 export function log(seed: number): PixelBuffer {
   const rng = new RNG(seed);
   const b = new PixelBuffer(40, 16);
@@ -691,7 +710,7 @@ export function log(seed: number): PixelBuffer {
 
   // Barrel: flat bands down the ramp, no gradient.
   const band = [3, 2, 2, 2, 1, 1, 1, 0, 0];
-  for (let x = 5; x <= 34; x++) for (let y = 4; y <= 12; y++) b.set(x, y, R.wood[band[y - 4]]);
+  for (let x = 5; x <= 35; x++) for (let y = 4; y <= 12; y++) b.set(x, y, R.wood[band[y - 4]]);
 
   // Bark splits: broken horizontal lines, one step darker than their row.
   for (const [ly, lx0, lx1, col] of [
@@ -703,25 +722,17 @@ export function log(seed: number): PixelBuffer {
     for (let x = lx0; x <= lx1; x++) if ((x - lx0) % 6 !== 4) b.set(x, ly, col);
   }
 
-  // Knot: the stub of a broken branch.
-  b.ellipse(25, 7.5, 2.4, 1.8, R.wood[1]);
-  b.ellipse(25, 7.5, 1.2, 0.9, R.wood[0]);
-  b.set(24, 6, R.wood[3]);
+  // Knot: the stub of a broken branch, lit on its upper-left lip.
+  b.ellipse(25, 7.5, 2.3, 1.7, R.wood[0]);
+  b.ellipse(25, 7.2, 1.5, 1.0, R.wood[1]);
+  b.set(24, 7, R.wood[3]);
   b.set(25, 6, R.wood[2]);
 
-  // Near cut face: bark rim, pale end grain, one off-centre ring, radial crack.
-  b.ellipse(5, 8, 2.7, 4.4, R.wood[1]);
-  b.ellipse(5, 8, 2.0, 3.7, R.wood[3]);
-  b.ellipse(5.3, 7.6, 1.3, 2.3, R.wood[1]);
-  b.ellipse(5.3, 7.6, 0.5, 1.3, R.wood[3]);
-  b.set(5, 8, R.wood[0]);
-  b.set(4, 10, R.wood[1]);
-  b.set(4, 11, R.wood[1]);
-  // Far cut face: same construction, one step down the ramp.
-  b.ellipse(35, 8, 2.5, 4.2, R.wood[0]);
-  b.ellipse(35, 8, 1.8, 3.4, R.wood[2]);
-  b.ellipse(35.2, 7.7, 1.0, 1.9, R.wood[0]);
-  b.set(35, 8, R.wood[2]);
+  // Cut faces, hand-placed for the same reason as the stump's: a 5x9 disc of
+  // end grain has room for exactly one ring, and it has to be off-centre.
+  b.blit(parseArt(LOG_END, { b: R.wood[0], p: R.wood[3], r: R.wood[1], k: R.wood[0] }), 3, 4);
+  // Far end: same construction, one step down the ramp, ring mirrored.
+  b.blit(parseArt(LOG_END_FAR, { b: R.wood[0], p: R.wood[2], r: R.wood[1], k: R.wood[0] }), 33, 4);
 
   // A little moss along the lit top edge.
   for (let i = 0; i < 3; i++) {

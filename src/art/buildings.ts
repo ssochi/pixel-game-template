@@ -402,6 +402,22 @@ export function tradeSign(kind: SignKind): PixelBuffer {
 // ---------------------------------------------------------------------------
 
 /**
+ * A true annulus `w` pixels thick. `PixelBuffer.ellipse(..., false)` keeps
+ * every pixel with a normalised distance over 0.42, which at radius 17 is a
+ * six pixel wide band — fine for a small pebble outline, useless for a hoop.
+ */
+function wheelRing(b: PixelBuffer, cx: number, cy: number, r: number, w: number, c: RGBA): void {
+  const outer = r + 0.5;
+  const inner = r - w + 0.5;
+  for (let y = Math.floor(cy - outer); y <= Math.ceil(cy + outer); y++) {
+    for (let x = Math.floor(cx - outer); x <= Math.ceil(cx + outer); x++) {
+      const d = Math.hypot(x - cx, y - cy);
+      if (d <= outer && d >= inner) b.blend(x, y, c);
+    }
+  }
+}
+
+/**
  * Undershot water wheel, 8 frames.
  *
  * With 8 paddles the wheel repeats every 45 degrees, so the loop only needs to
@@ -428,28 +444,31 @@ export function waterWheelClip(): Clip {
     const b = new PixelBuffer(size, size);
     const rot = (f / 8) * ((Math.PI * 2) / PADDLES);
     // Two hoops: a heavy outer rim the boards are nailed to, and an inner one
-    // the spokes die into.
-    b.ellipse(cx, cy, RAD, RAD, R.wood[1], false);
-    b.ellipse(cx, cy, RAD - 1, RAD - 1, R.wood[2], false);
-    b.ellipse(cx, cy, RAD - 6, RAD - 6, R.wood[1], false);
+    // the spokes die into. Note these are drawn with `wheelRing`, not with
+    // `ellipse(..., false)` — at r=17 that leaves a *six pixel* band, and two
+    // of them overlapping is what turned the old wheel into a solid disc with
+    // no spokes and no blades visible at all.
+    wheelRing(b, cx, cy, RAD, 2, R.wood[1]);
+    wheelRing(b, cx, cy, RAD - 6, 1, R.wood[1]);
     // Eight light spokes, then four heavy cross spokes over them: the cross is
-    // what gives the centre enough mass to read at this size.
+    // what gives the centre enough mass to read as machinery at this size.
     for (let i = 0; i < PADDLES; i++) {
       const a = rot + (i / PADDLES) * Math.PI * 2;
-      b.line(cx + Math.cos(a) * 4, cy + Math.sin(a) * 4, cx + Math.cos(a) * (RAD - 3), cy + Math.sin(a) * (RAD - 3), R.wood[1]);
+      b.line(cx + Math.cos(a) * 4, cy + Math.sin(a) * 4, cx + Math.cos(a) * (RAD - 1), cy + Math.sin(a) * (RAD - 1), R.wood[1]);
     }
     for (let i = 0; i < 4; i++) {
       const a = rot + (i / 4) * Math.PI * 2;
       b.capsule(
         cx + Math.cos(a) * 3,
         cy + Math.sin(a) * 3,
-        cx + Math.cos(a) * (RAD - 4),
-        cy + Math.sin(a) * (RAD - 4),
-        1.4,
+        cx + Math.cos(a) * (RAD - 3),
+        cy + Math.sin(a) * (RAD - 3),
+        1,
         R.wood[2],
       );
     }
-    // Paddle boards, laid tangent to the rim and moving with `rot`.
+    // Paddle boards, laid tangent to the rim and moving with `rot`. Nine pixels
+    // long on a rim ~13px per bay, so there is a clear gap between blades.
     for (let i = 0; i < PADDLES; i++) {
       const a = rot + (i / PADDLES) * Math.PI * 2;
       const ca = Math.cos(a);
@@ -457,7 +476,7 @@ export function waterWheelClip(): Clip {
       // Tangent unit vector — the direction the board actually lies along.
       const tx = -sa;
       const ty = ca;
-      const half = 5;
+      const half = 4;
       for (let k = 0; k < 3; k++) {
         const px = cx + ca * (BOARD + k);
         const py = cy + sa * (BOARD + k);
