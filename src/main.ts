@@ -17,10 +17,10 @@ import { Critter, Duck, Villager, gossip } from './game/npc';
 import { Lighting, type Light } from './game/lighting';
 import { Particles } from './game/particles';
 import { Player } from './game/player';
-import { Farm, CROPS, FARM, Soil } from './game/farm';
+import { Farm, CROPS, FARM, Soil, type Tile } from './game/farm';
 import { Fishing } from './game/fishing';
 import { TILE } from './art/farm';
-import { Inventory, ITEMS, SHOP_STOCK } from './game/inventory';
+import { Inventory, ITEMS, SHOP_STOCK, iconFor } from './game/inventory';
 import { RoomBuilder, type Room } from './game/interior';
 import { Scene } from './game/scene';
 import { BRIDGE, MILL, WORLD_H, WORLD_W, bakeGround } from './game/terrain';
@@ -126,6 +126,35 @@ function start(): void {
   let shopIndex = 0;
   const fishing = new Fishing();
 
+  /**
+   * The spot the held tool acts on: one reach along the aim, from the waist.
+   * The target indicator and `useTool` both read this, so what you see
+   * highlighted is exactly what you hit.
+   */
+  const REACH = 14;
+  function toolTarget(): { x: number; y: number } {
+    return {
+      x: player.x + Math.cos(player.aim) * REACH,
+      y: player.y - 4 + Math.sin(player.aim) * REACH,
+    };
+  }
+
+  /** Would the held tool actually do something to this tile? */
+  function toolWouldWork(use: string, t: Tile): boolean {
+    switch (use) {
+      case 'till':
+        return t.soil === Soil.Wild;
+      case 'water':
+        return t.soil === Soil.Tilled && !t.watered;
+      case 'plant':
+        return t.soil === Soil.Tilled && !t.crop;
+      case 'cut':
+        return !!t.crop || t.soil === Soil.Tilled;
+      default:
+        return false;
+    }
+  }
+
   function useTool(): void {
     const held = inv.held;
     if (!held || energy <= 0) return;
@@ -142,10 +171,8 @@ function start(): void {
       }
       return;
     }
-    // Act on the tile in front of the player.
-    const reach = 14;
-    const fx2 = player.x + Math.cos(player.aim) * reach;
-    const fy2 = player.y - 4 + Math.sin(player.aim) * reach;
+    // Act on the tile in front of the player — the same one the indicator drew.
+    const { x: fx2, y: fy2 } = toolTarget();
     const i = farm.indexAt(fx2, fy2);
     let did = false;
     if (i >= 0) {
@@ -418,6 +445,8 @@ function start(): void {
       player.y = room.spawnY;
       player.indoors = true;
       player.stop();
+      // Smoke and dust have to die at the walls; a room is not open sky.
+      fx.setBounds({ x0: 0, y0: 0, x1: room.w, y1: room.h });
       roomVillagers = room.npcs.map((n, i) => {
         const area = { x0: n.x - 10, y0: n.y - 4, x1: n.x + 10, y1: n.y + 4 };
         const def = n.cast ? castOf.get(n.cast) : undefined;
@@ -442,6 +471,7 @@ function start(): void {
       player.y = returnTo.y;
       player.indoors = false;
       player.stop();
+      fx.setBounds(null);
       camera.follow(player.x, player.y, WORLD_W, WORLD_H, 1, true);
     }
     fadeDir = -1;
@@ -494,6 +524,13 @@ function start(): void {
   }
 
   function update(dt: number): void {
+    // What the hand is holding, refreshed before anything can return early so
+    // the sprite is right even in the branches that skip the rest of the frame.
+    // Only tools get drawn: a turnip in the fist reads as a bug, not a feature.
+    const inHand = inv.held;
+    player.heldSheet = inHand?.tool ? iconFor(assets, inHand.id) : null;
+    player.fishingActive = fishing.active;
+
     // The shop menu takes all input while it is open — before the gallery
     // toggle, or Tab would open the gallery on top of it instead of closing it.
     if (shopOpen) {
@@ -634,7 +671,12 @@ function start(): void {
     for (const v of villagers) {
       if (!v.castId) continue;
       const def = castOf.get(v.castId);
-      v.indoors = !!def && INDOOR_WORK.has(def.work) && v.activity === 'work';
+      const working = !!def && INDOOR_WORK.has(def.work) && v.activity === 'work';
+      // During sleep the Villager sets its own indoors flag when it reaches its
+      // door — forcing it false here put the whole cast back on the street at
+      // night. Only clear it outside both the work shift and the sleep slot.
+      if (working) v.indoors = true;
+      else if (v.activity !== 'sleep') v.indoors = false;
     }
     gossip(villagers, dt);
     for (const a of animals) a.update(dt, scene.solids);
@@ -700,7 +742,7 @@ function start(): void {
     if (fishing.state === 'result' && fishing.result?.caught && fishing.result.fish) {
       drawCatch(ctx, assets, fishing.result.fish);
     }
-    if (shopOpen) drawShop(ctx, assets, SHOP_STOCK, shopIndex, inv.gold);
+    if (shopOpen) drawShop(ctx, assets, SHOP_STOCK, shopIndex, inv.gold, (item) => inv.count(item));
       if (sleeping) drawDayCard(ctx, day, Math.min(1, sleepT < 1 ? sleepT : 2 - sleepT));
       return;
     }
@@ -732,6 +774,10 @@ function start(): void {
         drawFrame(ctx, t.watered ? assets.farm.soilWet : assets.farm.soilDry, 0, o.x - camX, o.y - camY);
       }
     }
+
+    // 3c. the tile the held farm tool is about to hit. Under the crops, so a
+    // full-grown pumpkin still sits on top of its own highlight.
+    drawTargetTile(camX, camY);
 
     // 4. y-sorted world
     type Item = { y: number; draw: () => void };
@@ -835,7 +881,7 @@ function start(): void {
     if (fishing.state === 'result' && fishing.result?.caught && fishing.result.fish) {
       drawCatch(ctx, assets, fishing.result.fish);
     }
-    if (shopOpen) drawShop(ctx, assets, SHOP_STOCK, shopIndex, inv.gold);
+    if (shopOpen) drawShop(ctx, assets, SHOP_STOCK, shopIndex, inv.gold, (item) => inv.count(item));
     if (sleeping) drawDayCard(ctx, day, Math.min(1, sleepT < 1 ? sleepT : 2 - sleepT));
   }
 
@@ -864,6 +910,46 @@ function start(): void {
         return `${q.title}  ${questProgress(q, (i) => inv.count(i)).join('  ')}`;
       })(),
     };
+  }
+
+  /** Tools that act on one square of the plot, and so want a cursor. */
+  const TILE_TOOLS = new Set(['till', 'water', 'plant', 'cut']);
+
+  /**
+   * The farming cursor: a box on the tile `useTool` would act on. White when
+   * the swing would do something, dim red when it would be wasted — you should
+   * be able to hoe a whole row without ever looking at the hotbar.
+   */
+  function drawTargetTile(camX: number, camY: number): void {
+    const held = inv.held;
+    if (!held || !TILE_TOOLS.has(held.use) || fishing.active) return;
+    const t0 = toolTarget();
+    const i = farm.indexAt(t0.x, t0.y);
+    if (i < 0) return;
+    const o = farm.tileOrigin(i);
+    const x = Math.round(o.x - camX);
+    const y = Math.round(o.y - camY);
+    const ok = toolWouldWork(held.use, farm.tiles[i]);
+
+    ctx.strokeStyle = ok ? 'rgba(232,240,252,0.4)' : 'rgba(126,38,44,0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+    if (!ok) return;
+    // Corner brackets: 2px thick, 5px arms. They survive the lighting pass on
+    // busy soil where a 1px outline alone goes muddy.
+    ctx.fillStyle = 'rgba(232,240,252,0.4)';
+    const A = 5;
+    for (const [cx, cy, sx, sy] of [
+      [x, y, 1, 1],
+      [x + TILE, y, -1, 1],
+      [x, y + TILE, 1, -1],
+      [x + TILE, y + TILE, -1, -1],
+    ]) {
+      const ox = sx > 0 ? cx : cx - 2;
+      const oy = sy > 0 ? cy : cy - 2;
+      ctx.fillRect(sx > 0 ? cx : cx - A, oy, A, 2);
+      ctx.fillRect(ox, sy > 0 ? cy : cy - A, 2, A);
+    }
   }
 
   function drawFade(): void {

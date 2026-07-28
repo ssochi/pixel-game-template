@@ -1,15 +1,18 @@
 /**
  * The player-controlled character.
  *
- * Twin-stick style: WASD moves, the mouse aims. The body faces the aim
- * direction (so the walk cycle can read as strafing) and the gun is a separate
- * sprite pivoted in the hand, which is why it can point anywhere without
- * needing 8 more baked directions.
+ * Farm-game handling: WASD both moves *and* turns the body, so you never walk
+ * backwards. The mouse only aims — it decides where a tool lands, where the
+ * float is cast and where a bullet goes — and the body snaps to it for the one
+ * frame a swing or a shot starts, then goes back to following your feet.
+ *
+ * Held things (gun, tool, rod) are separate sprites pivoted in the hand, which
+ * is why they can point anywhere without needing 8 more baked directions.
  */
 import type { Assets } from '../art/assets';
 import type { Dir } from '../art/character';
 import { P } from '../art/palette';
-import { clipFinished, drawClip, drawFrame, type Clip } from '../art/sheet';
+import { clipDuration, clipFinished, drawClip, drawFrame, type Clip, type Sheet } from '../art/sheet';
 import type { Input } from '../engine/input';
 import type { Camera } from '../engine/screen';
 import type { Light } from './lighting';
@@ -59,6 +62,12 @@ export class Player {
   readonly bullets: Bullet[] = [];
   private stepT = 0;
   private splashT = 0;
+  /**
+   * Seconds left of "the aim owns the facing". Set when a swing or a shot
+   * starts so the body holds the direction it struck in for the whole
+   * animation, instead of being yanked back by whatever key is still held.
+   */
+  private faceLockT = 0;
 
   constructor(private a: Assets) {}
 
@@ -145,21 +154,16 @@ export class Player {
     this.moveAxis(this.vx * dt, 0, solids);
     this.moveAxis(0, this.vy * dt, solids);
 
-    // --- facing from the aim direction --------------------------------------
-    const a = this.aim;
-    const abs = Math.abs(a);
-    if (abs < Math.PI * 0.3) {
-      this.dir = 1;
-      this.flip = false;
-    } else if (abs > Math.PI * 0.7) {
-      this.dir = 1;
-      this.flip = true;
-    } else if (a > 0) {
-      this.dir = 0;
-      this.flip = false;
-    } else {
-      this.dir = 2;
-      this.flip = false;
+    // --- facing from the movement direction ---------------------------------
+    // Walk left and you face left, wherever the cursor happens to be. Standing
+    // still keeps the last facing; a swing overrides it for its own duration
+    // (see `faceAim`) so tools land where you pointed them.
+    this.faceLockT = Math.max(0, this.faceLockT - dt);
+    if (len > 0 && this.faceLockT <= 0) {
+      // Velocity is the honest direction (it is what the walk cycle shows), but
+      // it reads zero when you are pushing into a wall — fall back to the keys.
+      const useV = Math.hypot(this.vx, this.vy) > 1;
+      this.face(useV ? this.vx : ix, useV ? this.vy : iy);
     }
 
     // --- shooting ----------------------------------------------------------
@@ -205,8 +209,30 @@ export class Player {
     return false;
   }
 
+  /** Point the body along a vector, snapped to the four baked directions. */
+  private face(dx: number, dy: number): void {
+    if (Math.abs(dx) > Math.abs(dy)) {
+      this.dir = 1;
+      this.flip = dx < 0;
+    } else {
+      this.dir = dy > 0 ? 0 : 2;
+      this.flip = false;
+    }
+  }
+
+  /**
+   * Snap the body to the cursor for the length of one action. You swing at what
+   * you are pointing at, so this fires once when the swing starts rather than
+   * every frame.
+   */
+  private faceAim(): void {
+    this.face(Math.cos(this.aim), Math.sin(this.aim));
+    this.faceLockT = clipDuration(this.a.hero.attack[this.dir]);
+  }
+
   /** Play the tool-swing animation. Called when a tool is used. */
   swing(): void {
+    this.faceAim();
     this.setState('attack');
     this.animT = 0;
   }
@@ -221,6 +247,7 @@ export class Player {
     this.fireT = FIRE_COOLDOWN;
     this.muzzleT = 0;
     this.gunRecoil = 3;
+    this.faceAim();
     this.setState('attack');
     this.animT = 0;
     const sx = this.x + Math.cos(this.aim) * 11;
@@ -324,14 +351,73 @@ export class Player {
       ctx.fill();
     }
 
+    // Facing away, the hand is on the far side of the body — same rule as the
+    // gun. Otherwise the tool stays in front: tucking it behind during the
+    // wind-up hides a thin hoe or scythe behind the torso entirely.
     const aimingUp = this.dir === 2;
-    if (aimingUp) this.drawGun(ctx, px, py);
+    const ang = this.heldAngle();
+
+    if (aimingUp) {
+      this.drawGun(ctx, px, py);
+      this.drawHeld(ctx, px, py, ang);
+    }
     drawClip(ctx, this.clip, this.animT, px, py, this.flip);
-    if (!aimingUp) this.drawGun(ctx, px, py);
+    if (!aimingUp) {
+      this.drawGun(ctx, px, py);
+      this.drawHeld(ctx, px, py, ang);
+    }
   }
 
   /** Set by the inventory: the gun is only drawn when it is the held item. */
   showGun = false;
+
+  /**
+   * The tool icon of whatever is in hand, or null for anything that is not a
+   * tool. Set from the inventory every frame; the swing draws it in the hand so
+   * hoeing does not read as punching the dirt.
+   */
+  heldSheet: Sheet | null = null;
+  /** True while a line is out: the rod is then held out steady, not swung. */
+  fishingActive = false;
+
+  /**
+   * Where the held tool is pointing this frame, or null when there is nothing
+   * to draw. A swing rides a short arc — wind up behind the shoulder, come down
+   * past the aim — while a cast rod just points at the float.
+   */
+  private heldAngle(): number | null {
+    if (!this.heldSheet || this.state === 'death') return null;
+    if (this.fishingActive) return this.aim;
+    if (this.state !== 'attack') return null;
+    const t = Math.max(0, Math.min(1, this.animT / clipDuration(this.a.hero.attack[this.dir])));
+    // Mirrored on the left so that swing chops downwards too, rather than
+    // scooping up like a golf shot.
+    return this.aim + (Math.cos(this.aim) < 0 ? -1 : 1) * (-1.2 + t * 1.8);
+  }
+
+  /** The tool itself, pivoted in the hand at `ang`. */
+  private drawHeld(ctx: CanvasRenderingContext2D, px: number, py: number, ang: number | null): void {
+    const sheet = this.heldSheet;
+    if (!sheet || ang === null) return;
+    // Whether the pose is mirrored is decided by the aim, not by the live
+    // angle: taken per-frame it would pop mid-swing as the tool crossed the
+    // vertical and `ang` changed sign.
+    const mirrored = Math.cos(this.aim) < 0;
+
+    const handY = py - 12;
+    ctx.save();
+    ctx.translate(px + Math.cos(ang) * 7, handY + Math.sin(ang) * 7);
+    ctx.rotate(ang);
+    // Flip so the blade stays above the handle when the tool points left.
+    // Mirroring here — before the PI/4 — leaves the tip on `ang`; it only
+    // changes which way up the tool hangs off it.
+    if (mirrored) ctx.scale(1, -1);
+    // The icons are all drawn pointing up-right, so PI/4 is what puts their
+    // business end on the angle we asked for.
+    ctx.rotate(Math.PI / 4);
+    drawFrame(ctx, sheet, 0, 0, 0);
+    ctx.restore();
+  }
 
   private drawGun(ctx: CanvasRenderingContext2D, px: number, py: number): void {
     if (this.state === 'death' || !this.showGun) return;
