@@ -9,7 +9,12 @@ import type { Light } from './lighting';
 import type { Particles } from './particles';
 import type { Player } from './player';
 import type { Solid } from './scene';
-import { blocksMovement } from './terrain';
+import { blocksMovement, isWater, onBridge } from './terrain';
+
+/** True where a step would land in the river outside the bridge deck. */
+function blockedByWater(x: number, y: number): boolean {
+  return isWater(x, y) && !onBridge(x, y);
+}
 
 type SlimeState = 'idle' | 'move' | 'attack' | 'death';
 
@@ -123,9 +128,9 @@ export class Slime {
   private step(dt: number, solids: Solid[]): void {
     const nx = this.x + this.vx * dt;
     const ny = this.y + this.vy * dt;
-    if (!blocksMovement(nx, this.y) && !this.hitsSolid(nx, this.y, solids)) this.x = nx;
+    if (!blocksMovement(nx, this.y) && !blockedByWater(nx, this.y) && !this.hitsSolid(nx, this.y, solids)) this.x = nx;
     else this.vx *= -1;
-    if (!blocksMovement(this.x, ny) && !this.hitsSolid(this.x, ny, solids)) this.y = ny;
+    if (!blocksMovement(this.x, ny) && !blockedByWater(this.x, ny) && !this.hitsSolid(this.x, ny, solids)) this.y = ny;
     else this.vy *= -1;
   }
 

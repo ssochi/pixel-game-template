@@ -13,7 +13,12 @@ import type { EmoteAssets, EmoteKind } from '../art/emote';
 import { drawClip, drawFrame, type Clip } from '../art/sheet';
 import { RNG } from '../engine/rng';
 import type { Solid } from './scene';
-import { blocksMovement } from './terrain';
+import { blocksMovement, isWater, onBridge } from './terrain';
+
+/** True where a step would land in the river outside the bridge deck. */
+function blockedByWater(x: number, y: number): boolean {
+  return isWater(x, y) && !onBridge(x, y);
+}
 
 export interface Area {
   x0: number;
@@ -108,8 +113,8 @@ abstract class Agent {
 
     const nx = this.x + this.vx * dt;
     const ny = this.y + this.vy * dt;
-    const blockedX = blocksMovement(nx, this.y) || this.hits(nx, this.y, solids);
-    const blockedY = blocksMovement(this.x, ny) || this.hits(this.x, ny, solids);
+    const blockedX = blocksMovement(nx, this.y) || blockedByWater(nx, this.y) || this.hits(nx, this.y, solids);
+    const blockedY = blocksMovement(this.x, ny) || blockedByWater(this.x, ny) || this.hits(this.x, ny, solids);
     if (!blockedX) this.x = nx;
     if (!blockedY) this.y = ny;
     if (blockedX && blockedY) {
@@ -126,6 +131,13 @@ abstract class Agent {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Every live Villager, so the crowd separation pass can look sideways at
+ * everyone else without threading a crowd list through every call site.
+ * Villagers are never removed mid-game, so this only ever grows.
+ */
+const villagerRegistry: Villager[] = [];
 
 /**
  * A townsperson with a day.
@@ -165,6 +177,11 @@ export class Villager extends Agent {
   private chatT = 0;
   emote: EmoteKind | null = null;
   private emoteT = 0;
+  /** Counts down after every bubble; a new one can't show until it lapses. */
+  private emoteCooldown = 0;
+  /** Fixed per-villager seat in the social/work ring around the area centre. */
+  private readonly ringAngle: number;
+  private readonly ringRadius: number;
 
   constructor(
     anims: CharacterAnims,
@@ -182,6 +199,9 @@ export class Villager extends Agent {
     this.stationary = stationary;
     this.schedule = schedule;
     if (stationary) this.state = 'idle';
+    this.ringAngle = this.rng.range(0, Math.PI * 2);
+    this.ringRadius = this.rng.range(6, 14);
+    villagerRegistry.push(this);
   }
 
   /** Pick the slot covering `dayT` and re-home if it changed. */
@@ -193,6 +213,14 @@ export class Villager extends Agent {
     if (idx === this.slot) return;
     this.slot = idx;
     const s = this.schedule[idx];
+    if (this.activity === 'sleep' && s.activity !== 'sleep') {
+      // Wake up: step back out the door before heading off for the day.
+      this.indoors = false;
+      this.x = (this.home.x0 + this.home.x1) / 2;
+      this.y = (this.home.y0 + this.home.y1) / 2;
+      this.tx = this.x;
+      this.ty = this.y;
+    }
     this.home = s.area;
     this.activity = s.activity;
     // Head off immediately rather than waiting out the current idle.
@@ -201,9 +229,77 @@ export class Villager extends Agent {
     else if (this.activity === 'work') this.showEmote('work', 3);
   }
 
+  /**
+   * Pick where inside `home` to walk to. Sleepers head straight for the door
+   * (the home area's centre); socialising/working villagers take a fixed
+   * seat on a loose ring around the centre instead of all converging on the
+   * same point; everyone else falls back to the base class's random pick.
+   */
+  protected override pickDestination(): void {
+    const cx = (this.home.x0 + this.home.x1) / 2;
+    const cy = (this.home.y0 + this.home.y1) / 2;
+    if (this.activity === 'sleep') {
+      if (!blocksMovement(cx, cy)) {
+        this.tx = cx;
+        this.ty = cy;
+        this.state = 'walk';
+        return;
+      }
+    } else if (this.activity === 'work' || this.activity === 'socialise') {
+      const nx = Math.max(this.home.x0 + 2, Math.min(this.home.x1 - 2, cx + Math.cos(this.ringAngle) * this.ringRadius));
+      const ny = Math.max(this.home.y0 + 2, Math.min(this.home.y1 - 2, cy + Math.sin(this.ringAngle) * this.ringRadius));
+      if (!blocksMovement(nx, ny)) {
+        this.tx = nx;
+        this.ty = ny;
+        this.state = 'walk';
+        return;
+      }
+    }
+    super.pickDestination();
+  }
+
+  /** Gate on bubble spam: at most one every 5s, except the sleep Z. */
   showEmote(kind: EmoteKind, seconds: number): void {
+    if (kind !== 'sleep' && this.emoteCooldown > 0) return;
     this.emote = kind;
     this.emoteT = seconds;
+    this.emoteCooldown = seconds + 5;
+  }
+
+  /**
+   * Nudge away from anyone standing within 12px. Sleeping and stationary
+   * villagers neither push nor get pushed — they're meant to stay put.
+   */
+  private separateFromCrowd(dt: number): void {
+    if (this.activity === 'sleep' || this.stationary) return;
+    let px = 0;
+    let py = 0;
+    for (const other of villagerRegistry) {
+      if (other === this || other.activity === 'sleep' || other.stationary) continue;
+      const dx = this.x - other.x;
+      const dy = this.y - other.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0 && dist < 12) {
+        const w = (12 - dist) / 12;
+        px += (dx / dist) * w;
+        py += (dy / dist) * w;
+      }
+    }
+    const mag = Math.hypot(px, py);
+    if (mag <= 0) return;
+    const maxStep = 12 * dt;
+    const nx = this.x + (px / mag) * maxStep;
+    const ny = this.y + (py / mag) * maxStep;
+    if (!blocksMovement(nx, this.y) && !blockedByWater(nx, this.y)) this.x = nx;
+    if (!blocksMovement(this.x, ny) && !blockedByWater(this.x, ny)) this.y = ny;
+  }
+
+  /** Once a sleeper reaches the door, they're considered to be in bed. */
+  private checkHomeArrival(): void {
+    if (this.activity !== 'sleep' || this.indoors) return;
+    const cx = (this.home.x0 + this.home.x1) / 2;
+    const cy = (this.home.y0 + this.home.y1) / 2;
+    if (Math.hypot(this.x - cx, this.y - cy) < 8) this.indoors = true;
   }
 
   /** Called by the crowd pass when two idle villagers are close enough. */
@@ -246,12 +342,14 @@ export class Villager extends Agent {
       this.emoteT -= dt;
       if (this.emoteT <= 0) this.emote = null;
     }
+    if (this.emoteCooldown > 0) this.emoteCooldown -= dt;
+    this.separateFromCrowd(dt);
+    this.checkHomeArrival();
 
     if (this.chatWith) {
       this.t += dt;
       this.chatT -= dt;
-      // Trade bubbles back and forth.
-      if (this.emoteT <= 0 && this.rng.chance(dt * 1.2)) this.showEmote(this.rng.chance(0.25) ? 'idea' : 'talk', 1.8);
+      // Each side already popped one bubble in startChat — no repeat loop.
       if (this.chatT <= 0) {
         this.chatWith.chatWith = null;
         this.chatWith = null;
