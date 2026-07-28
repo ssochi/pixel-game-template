@@ -165,8 +165,9 @@ export class Scene {
       const t = i / n;
       const sx = x - bld.solidW + t * bld.solidW * 2;
       // Leave a gap in the wall where the door is, or the trigger is
-      // unreachable and the building can never be entered.
-      if (interior && Math.abs(sx - x) < 12) continue;
+      // unreachable and the building can never be entered. The gap tracks the
+      // 16px doorway below.
+      if (interior && Math.abs(sx - x) < 14) continue;
       this.solids.push({ x: sx, y: y - 8, r: 9 });
     }
     // One light per window, kept deliberately weak: a building has three or
@@ -184,14 +185,17 @@ export class Scene {
       });
     }
     if (bld.chimney) this.smoke.push({ x: x + bld.chimney.x, y: y + bld.chimney.y, rate: 5 });
-    if (sign) this.add(sign, x + bld.solidW - 4, y - 20, { sortY: y + 1, label: `${label} sign` });
+    // The sign hangs off the bracket the facade drew for it, up at the head of
+    // the ground floor — on a 40px storey the old fixed `y - 20` put it at
+    // waist height, level with the barrels.
+    if (sign) this.add(sign, x + bld.sign.x, y + bld.sign.y, { sortY: y + 1, label: `${label} sign` });
     // The patch of street just outside the door: where residents go to sleep.
-    this.homes.push({ x0: x - 12, y0: y + 6, x1: x + 12, y1: y + 16 });
+    this.homes.push({ x0: x - 14, y0: y + 6, x1: x + 14, y1: y + 16 });
     if (interior) {
       // The doorway itself: a narrow trigger sitting on the threshold. The
       // collision circles above leave this gap, so you can only reach it by
       // walking straight at the door.
-      this.doors.push({ x: x - 7, y: y - 6, w: 14, h: 10, kind: interior, seed: this.doorSeed++, label });
+      this.doors.push({ x: x - 8, y: y - 6, w: 16, h: 10, kind: interior, seed: this.doorSeed++, label });
     }
   }
 
@@ -226,63 +230,88 @@ export class Scene {
 
   // --- the town ------------------------------------------------------------
 
+  /**
+   * The street frontages.
+   *
+   * These coordinates are hand-written, so they had to be re-cut when the
+   * buildings were rescaled to the 30px villager — a cottage went from 58px of
+   * sprite to 106 and the inn from 88 to 152, which at the old spacing put
+   * every roof through the doorstep of the house above it. Three rules drive
+   * the numbers below:
+   *
+   *  - **Vertical pitch.** Consecutive frontages on one side of a street are
+   *    spaced by at least the upper one's sprite height plus a margin, so no
+   *    roof lands on the neighbour's threshold.
+   *  - **Roads carry collision, not pixels.** A facade may *draw* over the road
+   *    behind it — that is just correct occlusion — but no building's collision
+   *    band (y-17..y+1) may sit on a carriageway, or the street is blocked.
+   *  - **The south-east block is narrow.** Between the main street's east kerb
+   *    (x 580) and the player's plot fence (x 696) there are 116px, so only the
+   *    slimmer frontages go there.
+   */
   private buildStreets(): void {
     const b = this.a.buildings;
-    const MAIN = 565;
+    const WEST = 437;
+    const EAST = 697;
+    /** The pinched block between the high street and the farm gate. */
+    const EAST_LOW = 636;
 
-    // High street, west side: inn and tavern face the square.
-    this.placeBuilding(b.inn, MAIN - 118, 448, 'inn', b.signs.inn, 'inn');
-    this.placeBuilding(b.tavern, MAIN + 130, 452, 'tavern', b.signs.tavern, 'tavern');
-    this.placeBuilding(b.shop, MAIN - 122, 600, 'general store', b.signs.shop, 'shop');
-    this.placeBuilding(b.smithy, MAIN + 128, 604, 'smithy', b.signs.smith, 'smithy');
+    // High street: inn and tavern face the square from either side of it.
+    this.placeBuilding(b.inn, WEST, 470, 'inn', b.signs.inn, 'inn');
+    this.placeBuilding(b.tavern, EAST, 478, 'tavern', b.signs.tavern, 'tavern');
+    this.placeBuilding(b.shop, WEST, 652, 'general store', b.signs.shop, 'shop');
+    this.placeBuilding(b.smithy, EAST_LOW, 614, 'smithy', b.signs.smith, 'smithy');
 
-    this.areas.forge = { x0: MAIN + 108, y0: 614, x1: MAIN + 152, y1: 632 };
-    this.areas.shop = { x0: MAIN - 142, y0: 610, x1: MAIN - 98, y1: 628 };
-    this.areas.tavern = { x0: MAIN + 108, y0: 462, x1: MAIN + 156, y1: 480 };
+    this.areas.forge = { x0: EAST_LOW - 22, y0: 624, x1: EAST_LOW + 22, y1: 642 };
+    this.areas.shop = { x0: WEST - 22, y0: 662, x1: WEST + 22, y1: 680 };
+    this.areas.tavern = { x0: EAST - 24, y0: 488, x1: EAST + 24, y1: 506 };
 
-    // Forge fire spilling out of the smithy door.
-    this.light({ x: MAIN + 128, y: 596, radius: 92, color: P.fire, intensity: 1.15, flicker: 0.35 });
-    this.smoke.push({ x: MAIN + 150, y: 566, rate: 9 });
+    // Forge fire spilling out of the smithy door, and its flue.
+    this.light({ x: EAST_LOW, y: 606, radius: 92, color: P.fire, intensity: 1.15, flicker: 0.35 });
+    this.smoke.push({ x: EAST_LOW + 20, y: 556, rate: 9 });
 
-    // Cottages up and down the main street.
+    // Cottages up and down the main street. The wide ones (0 and 2, both with
+    // outbuildings) take the roomy frontages; 1 and 3 take the tight ones.
     const rows: [number, number, number][] = [
-      [MAIN - 116, 300, 0],
-      [MAIN - 120, 210, 1],
-      [MAIN + 122, 300, 2],
-      [MAIN + 118, 208, 3],
-      [MAIN - 118, 720, 1],
-      [MAIN + 124, 716, 0],
-      [MAIN - 122, 820, 3],
-      [MAIN + 120, 824, 2],
+      [WEST, 170, 2],
+      [WEST, 300, 0],
+      [WEST, 778, 3],
+      [WEST, 895, 1],
+      [EAST, 180, 0],
+      [EAST, 330, 2],
+      [EAST_LOW, 760, 1],
+      [EAST_LOW, 885, 3],
     ];
     for (const [x, y, kind] of rows) {
       this.placeBuilding(b.cottages[kind], x, y, 'cottage', undefined, 'cottage');
     }
 
-    // Chapel on its own lane to the north-east.
-    this.placeBuilding(b.chapel, 860, 214, 'chapel', undefined, 'chapel');
+    // Chapel on its own lane to the north-east, standing back from the verge so
+    // its footprint leaves the lane open.
+    this.placeBuilding(b.chapel, 866, 182, 'chapel', undefined, 'chapel');
 
     // Street lamps down the main street and along the high street.
     for (const [x, y] of [
-      [MAIN - 26, 360],
-      [MAIN + 26, 560],
-      [MAIN - 26, 660],
-      [MAIN + 26, 250],
-      [760, 486],
-      [400, 486],
+      [539, 360],
+      [591, 560],
+      [539, 660],
+      [591, 250],
+      [772, 492],
+      [392, 492],
       [960, 490],
     ] as [number, number][]) {
       this.add(b.lamppost, x, y, { solid: 4, label: 'lamppost' });
       this.light({ x, y: y - 34, radius: 78, color: [255, 208, 140, 255], intensity: 1, flicker: 0.12 });
     }
 
-    // A cart and barrels outside the tavern, crates outside the store.
-    this.add(b.cart, MAIN + 76, 470, { solid: 12, label: 'cart' });
-    this.add(this.a.props.barrels[0], MAIN + 96, 486, { solid: 8, label: 'barrel' });
-    this.add(this.a.props.barrels[1], MAIN + 106, 494, { solid: 8, label: 'barrel' });
-    this.add(this.a.props.crates[0], MAIN - 84, 614, { solid: 8, label: 'crate' });
-    this.add(this.a.props.crates[1], MAIN - 74, 622, { solid: 8, label: 'crate' });
-    this.add(this.a.props.sign, MAIN - 40, 520, { solid: 4, label: 'signpost' });
+    // A cart and barrels outside the tavern, crates outside the store. All of
+    // them stand clear of the widened frontages.
+    this.add(b.cart, 606, 458, { solid: 12, label: 'cart' });
+    this.add(this.a.props.barrels[0], 612, 480, { solid: 8, label: 'barrel' });
+    this.add(this.a.props.barrels[1], 604, 490, { solid: 8, label: 'barrel' });
+    this.add(this.a.props.crates[0], 490, 640, { solid: 8, label: 'crate' });
+    this.add(this.a.props.crates[1], 498, 650, { solid: 8, label: 'crate' });
+    this.add(this.a.props.sign, 528, 530, { solid: 4, label: 'signpost' });
   }
 
   private buildMarket(): void {
@@ -294,12 +323,14 @@ export class Scene {
     // Well at the centre of the square — the classic town focal point.
     this.add(p.well, cx, cy + 6, { solid: 14, label: 'town well' });
 
-    // Stalls around it, each with a stallholder.
+    // Stalls around it, each with a stallholder. They are pulled in off the
+    // corners of the square: the inn and the tavern now reach ~50px into it,
+    // and a stall on the old corner mark ended up inside the inn's footprint.
     const stalls: [number, number, number][] = [
-      [cx - 84, cy - 46, 0],
-      [cx + 80, cy - 42, 1],
-      [cx - 78, cy + 62, 2],
-      [cx + 84, cy + 58, 0],
+      [cx - 65, cy - 73, 0],
+      [cx + 65, cy - 73, 1],
+      [cx - 65, cy + 73, 2],
+      [cx + 61, cy + 73, 0],
     ];
     stalls.forEach(([x, y, kind], i) => {
       this.add(b.stalls[kind], x, y, { solid: 12, label: 'market stall' });
@@ -319,13 +350,14 @@ export class Scene {
     // A brazier for warmth and a couple of crates of goods.
     this.add(p.brazier, cx - 40, cy + 78, { solid: 7, label: 'brazier' });
     this.light({ x: cx - 40, y: cy + 54, radius: 100, color: P.fire, intensity: 1.05, flicker: 0.28 });
-    this.add(p.crates[1], cx + 44, cy + 80, { solid: 8, label: 'crate' });
+    this.add(p.crates[1], cx + 35, cy + 85, { solid: 8, label: 'crate' });
     this.add(b.cart, cx + 6, cy - 74, { solid: 12, label: 'cart' });
 
-    // Banners on poles at the square's corners.
+    // Banners on poles across the head of the square. They used to stand on the
+    // corners, which the inn's and the tavern's roofs now cover.
     for (const [x, y] of [
-      [PLAZA.x0 + 12, PLAZA.y0 + 10],
-      [PLAZA.x1 - 12, PLAZA.y0 + 10],
+      [cx - 45, PLAZA.y0 + 8],
+      [cx + 45, PLAZA.y0 + 8],
     ] as [number, number][]) {
       this.add(p.pillar, x, y, { solid: 8, label: 'pillar' });
       this.add(p.banner, x, y - 34, { sortY: y - 1, label: 'banner' });
@@ -369,22 +401,26 @@ export class Scene {
 
   private buildMill(): void {
     const b = this.a.buildings;
-    const mx = MILL.x;
+    // `MILL.x` in terrain.ts is measured to the old, narrower mill. The rescaled
+    // block is 12px wider on each side, so it is pulled back off the bank by
+    // that much: the point of the thing is that the wheel dips in the current,
+    // and the wall has to stay on the west bank for that to read.
+    const mx = MILL.x - 12;
     const my = MILL.y;
     this.placeBuilding(b.mill, mx, my, 'watermill', undefined, 'mill');
 
     // The wheel hangs off the river side of the mill, its bottom in the water.
-    const wheelX = mx + 44;
+    const wheelX = mx + 56;
     this.add(b.waterWheel, wheelX, my - 6, { sortY: my + 2, label: 'water wheel' });
     this.waterObstacles.push({ x: wheelX + 6, y: my - 20, r: 10 });
     // Constant spray where the paddles enter the current.
     this.smoke.push({ x: wheelX + 4, y: my - 12, rate: 0 });
 
     // A sluice of stacked planks leading the water to the wheel, plus sacks.
-    this.add(this.a.props.crates[0], mx - 34, my + 12, { solid: 8, label: 'grain sack' });
-    this.add(this.a.props.crates[1], mx - 22, my + 18, { solid: 8, label: 'grain sack' });
-    this.add(b.cart, mx - 56, my - 6, { solid: 12, label: 'cart' });
-    const millYard: Area = { x0: mx - 60, y0: my + 10, x1: mx + 20, y1: my + 40 };
+    this.add(this.a.props.crates[0], mx - 40, my + 22, { solid: 8, label: 'grain sack' });
+    this.add(this.a.props.crates[1], mx - 28, my + 28, { solid: 8, label: 'grain sack' });
+    this.add(b.cart, mx - 74, my + 26, { solid: 12, label: 'cart' });
+    const millYard: Area = { x0: mx - 60, y0: my + 12, x1: mx + 20, y1: my + 42 };
     this.areas.mill = millYard;
     this.villagerSpawns.push({
       kind: 'miller',
@@ -399,8 +435,11 @@ export class Scene {
     const b = this.a.buildings;
     const p = this.a.props;
 
-    // Barn beside the paddock.
-    this.placeBuilding(b.barn, 380, 800, 'barn', undefined, 'barn');
+    // Barn on the farm track west of the paddock. It used to stand at (380,800)
+    // — inside the paddock, straddling its own north fence — which the rescaled
+    // 110x116 block turned from a niggle into an obstruction. Here it clears
+    // field 2 above it (y1 740) and the paddock's west fence (x0 300).
+    this.placeBuilding(b.barn, 232, 872, 'barn', undefined, 'barn');
 
     // Crops, laid in rows that follow each field's furrows.
     for (const f of FIELDS) {
@@ -421,9 +460,9 @@ export class Scene {
       // Scarecrow and haystacks on the headland.
       this.add(b.scarecrow, (f.x0 + f.x1) / 2, f.y0 + 6, { solid: 5, label: 'scarecrow' });
     }
-    this.add(b.haystacks[0], 330, 300, { solid: 12, label: 'haystack' });
+    this.add(b.haystacks[0], 352, 300, { solid: 12, label: 'haystack' });
     this.add(b.haystacks[1], 150, 470, { solid: 12, label: 'haystack' });
-    this.add(b.haystacks[0], 300, 776, { solid: 12, label: 'haystack', flip: true });
+    this.add(b.haystacks[0], 500, 760, { solid: 12, label: 'haystack', flip: true });
 
     // Paddock fence, with a gap for a gate on the north side.
     const step = 16;
