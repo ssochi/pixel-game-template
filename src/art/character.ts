@@ -547,10 +547,17 @@ function walkPoses(frames = 8, amp = 1): Pose[] {
     // +1 at contact (legs apart), -1 at passing (legs together).
     const stride = Math.abs(s);
     const run = amp > 1;
+    const bobAmp = run ? 2.4 : 1.5;
+    // `bob` moves `footY`, so the feet ride the bounce with the hips: at the
+    // passing pose the *planted* foot came up off the floor with the rest of the
+    // body and the character hovered two pixels above its own shadow. Cancelling
+    // the bob out of both legs pins the standing foot to the ground and leaves
+    // the bob doing what it is for — lifting the hips over the stance leg.
+    const plant = (1 - stride) * bobAmp;
     out.push(
       pose({
         // Down on contact, up on the pass.
-        bob: (stride - 0.5) * (run ? 2.4 : 1.5),
+        bob: (stride - 0.5) * bobAmp,
         crouch: run ? 1 : 0,
         lean: run ? 1.6 : 0.4,
         legAX: s * 2.8 * amp,
@@ -565,9 +572,9 @@ function walkPoses(frames = 8, amp = 1): Pose[] {
         // looks like. Every other channel (arm counter-swing, twist, head lag)
         // was already correct, so the sprite read as a head facing one way on a
         // body walking the other.
-        legAY: -Math.max(0, Math.sin(ph + Math.PI - 0.6)) * 2.1 * amp,
+        legAY: plant - Math.max(0, Math.sin(ph + Math.PI - 0.6)) * 2.1 * amp,
         legBX: -s * 2.8 * amp,
-        legBY: -Math.max(0, Math.sin(ph - 0.6)) * 2.1 * amp,
+        legBY: plant - Math.max(0, Math.sin(ph - 0.6)) * 2.1 * amp,
         armAX: -s * 2 * amp,
         armAY: -stride * 0.9,
         armBX: s * 2 * amp,

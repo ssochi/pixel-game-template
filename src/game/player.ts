@@ -484,12 +484,13 @@ export class Player {
     }
 
     if (this.heldUse === 'cut') {
-      // A scythe cuts on the horizontal. Squashing the hand path to a flat
-      // ellipse and dropping it below the fist is what sells the blade as
-      // travelling *around* the body rather than down through it.
+      // A scythe cuts on the horizontal. The *hand* swings the full 2.8 rad
+      // around the body on a squashed ellipse, but the blade itself only tilts
+      // a fraction of that: rotating it the whole way turns the reap into
+      // another overhead chop, which is the one thing a scythe never does.
       const d = sweepArc(t);
-      const rot = this.aim + mir * d;
-      return { rot, ox: Math.cos(rot) * 8, oy: Math.sin(rot) * 3.5 + 2 };
+      const around = this.aim + mir * d;
+      return { rot: this.aim + mir * d * 0.4, ox: Math.cos(around) * 10, oy: Math.sin(around) * 3.5 + 2 };
     }
 
     let d: number;
