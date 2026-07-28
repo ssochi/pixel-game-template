@@ -453,7 +453,10 @@ export function building(opts: BuildingOpts): Building {
 
   // --- lean-to behind the main block --------------------------------------
   if (lean !== 'none') {
-    const lx = lean === 'left' ? cx - upperHalf - leanW : cx + upperHalf;
+    // Butted against the *ground floor*, not the upper one: on a jettied block
+    // the two differ by 4px and the outbuilding ends up floating in mid-air
+    // with daylight between it and the wall it is supposed to lean on.
+    const lx = lean === 'left' ? cx - lowerHalf - leanW : cx + lowerHalf;
     leanTo(b, lx, baseY, leanW, Math.round(wallH * 0.42), 10, roofRamp);
   }
 
@@ -518,8 +521,13 @@ export function building(opts: BuildingOpts): Building {
           { y: baseY - lowerH + Math.round(lowerH * 0.36), half: lowerHalf, door: dx },
         ]
       : [{ y: wallTop + Math.round(wallH * 0.34), half: upperHalf, door: dx }];
+  // A trade sign hangs on the wall beside the door, so that stretch of facade
+  // belongs to the sign and not to a window — otherwise the board is painted
+  // straight over a lit window and the shop looks like it has a hole in it.
+  const signBand: [number, number] | null = signBar && dx !== null ? [dx + 12, dx + 36] : null;
   for (const row of rows) {
     for (const wxp of windowRow(cx, row.half, windows, row.door)) {
+      if (signBand && row.door !== null && wxp > signBand[0] && wxp < signBand[1]) continue;
       // Shutters need four pixels of wall either side of the opening, and they
       // must not run into the door hood.
       const clearance = row.half - Math.abs(wxp - cx);
@@ -582,7 +590,9 @@ export function building(opts: BuildingOpts): Building {
     ay: baseY,
     windows: winList,
     chimney: chim,
-    sign: { x: lowerHalf - 14, y: -(lowerH - 10) },
+    // The board hangs off the bracket `signBar` draws, just right of the door,
+    // at the head of the ground floor.
+    sign: { x: Math.min(lowerHalf - 14, 18), y: -(lowerH - 10) },
     solidW: lowerHalf + (lean === 'none' ? 0 : leanW * 0.6),
     solidH: wallH + roofH * 0.35,
   };
