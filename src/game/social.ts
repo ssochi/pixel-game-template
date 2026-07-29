@@ -270,6 +270,17 @@ export interface Quest {
   taken: boolean;
 }
 
+/**
+ * The quest chain, in order.
+ *
+ * **This is module state, and `taken`/`done` are written straight onto these
+ * objects.** Unlike `Social`, which is rebuilt by `new Social()`, this array
+ * lives as long as the page does — so nothing resets it implicitly. Anything
+ * that starts a run has to deal with it explicitly at both ends: the save has
+ * to store the flags (or the quest chain is lost on reload), and a new game has
+ * to call `resetQuests()` (or it inherits the last run's progress). See
+ * `game/save.ts`.
+ */
 export const QUESTS: Quest[] = [
   {
     id: 'firstHarvest',
@@ -331,6 +342,14 @@ export const QUESTS: Quest[] = [
     taken: false,
   },
 ];
+
+/** Put the board back to day one. Required by NEW GAME; see the note above. */
+export function resetQuests(): void {
+  for (const q of QUESTS) {
+    q.taken = false;
+    q.done = false;
+  }
+}
 
 /** The quest currently on the board: the first one not yet finished. */
 export function activeQuest(): Quest | null {

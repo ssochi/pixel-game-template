@@ -23,6 +23,8 @@ export interface HudState {
   energy: number;
   /** One-line reminder of the job on the notice board. */
   quest: string | null;
+  /** Transient message — currently only "the save could not be written". */
+  notice: string | null;
 }
 
 function panel(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, a = 0.72): void {
@@ -103,8 +105,11 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: HudState): void {
   const gold = `${s.gold}G`;
   drawText(ctx, gold, GAME_W - textWidth(gold) - 4, 22, '#f0c261');
 
-  // The job on the notice board, directly under the clock.
-  if (s.quest) capsule(ctx, capsuleFit(s.quest), questY, '#8fd0a0');
+  // The job on the notice board, directly under the clock, and under that any
+  // one-off notice. They stack, so a notice never hides the quest line.
+  let colY = questY;
+  if (s.quest) colY = capsule(ctx, capsuleFit(s.quest), colY, '#8fd0a0');
+  if (s.notice) capsule(ctx, capsuleFit(s.notice), colY, '#e06b6b');
 
   // Energy bar, bottom-right, with a small "STA" tag and a panel that clears
   // the screen edge by a few pixels either way.
@@ -353,6 +358,77 @@ export function drawDayCard(ctx: CanvasRenderingContext2D, day: number, alpha: n
   if (alpha < 0.55) return;
   const t = `DAY ${day}`;
   drawText(ctx, t, Math.round((GAME_W - textWidth(t) * 2) / 2), GAME_H / 2 - 8, '#f0c261');
+}
+
+export interface TitleState {
+  /** Day the save on disk left off on — the whole reason CONTINUE is offered. */
+  saveDay: number;
+  /** 0 = continue, 1 = new game. */
+  index: number;
+  /** True while the "are you sure" step is up. */
+  confirming: boolean;
+  /** 0 = keep the save, 1 = erase it. */
+  confirmIndex: number;
+}
+
+/**
+ * The boot menu, shown only when a save exists.
+ *
+ * It draws over the live valley rather than a black plate, so the first thing
+ * you see is the place you are going back to. Everything is laid out on whole
+ * pixels off the panel's own origin: at 448x252 a half-pixel is a smeared
+ * glyph, and the panel is sized to its longest line so the confirm step — whose
+ * options are much longer — does not need a second set of numbers.
+ */
+export function drawTitle(ctx: CanvasRenderingContext2D, s: TitleState): void {
+  ctx.fillStyle = 'rgba(6,7,12,0.72)';
+  ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+  // The name, at a clean 2x. Integer translate + integer scale keeps the 3x5
+  // font on the grid; anything fractional would resample it into mush.
+  const name = 'RIVERVALE';
+  ctx.save();
+  ctx.translate(Math.round((GAME_W - textWidth(name) * 2) / 2), 56);
+  ctx.scale(2, 2);
+  drawText(ctx, name, 0, 0, '#f0c261');
+  ctx.restore();
+
+  const head = s.confirming ? ['ERASING THE SAVE CANNOT', 'BE UNDONE.'] : [];
+  const opts = s.confirming
+    ? ['NO - KEEP MY SAVE', 'YES - ERASE IT']
+    : [`CONTINUE - DAY ${s.saveDay}`, 'NEW GAME'];
+  const pick = s.confirming ? s.confirmIndex : s.index;
+  const y0 = 84;
+
+  const ROW = 12;
+  const longest = [...head, ...opts].reduce((m, l) => Math.max(m, textWidth(l)), 0);
+  const w = Math.max(150, longest + 24);
+  // The first option's highlight bar starts 2px above its text, and the last
+  // one ends 2px below: sizing the panel off `optY` keeps the air at the bottom
+  // equal to the air at the top for both step counts.
+  const optY = y0 + 6 + head.length * 8 + (head.length ? 4 : 0);
+  const h = optY - y0 + opts.length * ROW;
+  const x = Math.round((GAME_W - w) / 2);
+  const y = y0;
+  panel(ctx, x, y, w, h, 0.9);
+
+  head.forEach((l, i) => drawText(ctx, l, x + Math.round((w - textWidth(l)) / 2), y + 5 + i * 8, '#cfe0f5'));
+  opts.forEach((l, i) => {
+    const ry = optY + i * ROW;
+    const on = i === pick;
+    if (on) {
+      ctx.fillStyle = 'rgba(60,74,100,0.85)';
+      ctx.fillRect(x + 3, ry - 2, w - 7, ROW - 2);
+    }
+    // The destructive option is the only red text on the screen, selected or
+    // not, so it never gets picked by muscle memory.
+    const danger = s.confirming && i === 1;
+    const tx = x + Math.round((w - textWidth(l)) / 2);
+    drawText(ctx, l, tx, ry, danger ? '#e06b6b' : on ? '#f0c261' : '#93a7c6');
+  });
+
+  const hint = s.confirming ? 'W/S PICK   E CONFIRM   Q BACK' : 'W/S PICK   E CONFIRM';
+  drawText(ctx, hint, Math.round((GAME_W - textWidth(hint)) / 2), y + h + 6, '#7f92b0');
 }
 
 const CELL = 60;

@@ -23,8 +23,19 @@ import { TILE } from './art/farm';
 import { Inventory, ITEMS, SHOP_STOCK, iconFor } from './game/inventory';
 import { RoomBuilder, type Room } from './game/interior';
 import { Scene } from './game/scene';
+import * as Save from './game/save';
 import { BRIDGE, MILL, WORLD_H, WORLD_W, bakeGround } from './game/terrain';
-import { Gallery, drawCatch, drawDayCard, drawDialogue, drawHotbar, drawHud, drawReel, drawShop } from './game/ui';
+import {
+  Gallery,
+  drawCatch,
+  drawDayCard,
+  drawDialogue,
+  drawHotbar,
+  drawHud,
+  drawReel,
+  drawShop,
+  drawTitle,
+} from './game/ui';
 import { River } from './game/water';
 
 const boot = document.getElementById('boot') as HTMLDivElement;
@@ -45,9 +56,11 @@ function start(): void {
   const gallery = new Gallery(assets.gallery);
   const input = new Input(screen.canvas, (x, y) => screen.toInternal(x, y));
 
-  // Start at the gate of the player's own plot.
-  player.x = 690;
-  player.y = 650;
+  // Start at the gate of the player's own plot. The spawn lives in `save.ts`
+  // beside the rest of the day-one state, so NEW GAME and a fresh boot cannot
+  // drift apart.
+  player.x = Save.NEW_GAME.x;
+  player.y = Save.NEW_GAME.y;
   camera.follow(player.x, player.y, WORLD_W, WORLD_H, 1, true);
 
   // No slimes in the overworld — this is a farming valley, not a shooting
@@ -113,8 +126,11 @@ function start(): void {
   // --- farming, inventory, day -----------------------------------------------
   const farm = new Farm();
   const inv = new Inventory();
-  let day = 1;
-  let energy = 1;
+  let day = Save.NEW_GAME.day;
+  let energy = Save.NEW_GAME.energy;
+  /** A short-lived line under the HUD's quest capsule. Currently save failures. */
+  let notice: string | null = null;
+  let noticeT = 0;
   /** Non-null while a dialogue box is open. */
   let talk: { speaker: string; lines: string[] } | null = null;
   /** 0..1 sleep transition; when it peaks the day rolls over. */
@@ -390,10 +406,77 @@ function start(): void {
         f.deco.hidden = false;
       }
     }
+    doSave();
+  }
+
+  // --- saving ---------------------------------------------------------------
+
+  /**
+   * The live game as `save.ts` sees it.
+   *
+   * The position is the catch. Sleeping happens indoors, so `player.x/y` at
+   * the one moment the game saves are room-local coordinates — writing those
+   * would reopen the save with the player standing at whatever spot in the
+   * valley happens to share those numbers. `returnTo` is the doorstep the
+   * player would walk back out onto, which is the only position that still
+   * means something once the interior is gone.
+   */
+  function gather(): Save.GameState {
+    const at = room ? returnTo : player;
+    return { day, dayT, energy, px: at.x, py: at.y, farm, inv, social, forage: scene.forage };
+  }
+
+  /** Copy the scalars back out and put the player down in the overworld. */
+  function adopt(s: Save.GameState): void {
+    day = s.day;
+    dayT = s.dayT;
+    energy = s.energy;
+    room = null;
+    pendingRoom = null;
+    pendingExit = false;
+    roomVillagers = [];
+    fade = 0;
+    fadeDir = 0;
+    talk = null;
+    shopOpen = false;
+    sleeping = false;
+    sleepT = 0;
+    fishing.cancel();
+    fx.setBounds(null);
+    player.x = s.px;
+    player.y = s.py;
+    player.indoors = false;
+    player.stop();
+    camera.follow(player.x, player.y, WORLD_W, WORLD_H, 1, true);
+  }
+
+  function doSave(): boolean {
+    const ok = Save.save(gather());
+    if (!ok) {
+      // Storage can be denied outright (private browsing) or full. Neither is
+      // worth interrupting the game for — say so once and carry on.
+      notice = 'SAVE FAILED - STORAGE BLOCKED';
+      noticeT = 8;
+    }
+    return ok;
+  }
+
+  function doLoad(): boolean {
+    const s = gather();
+    if (!Save.load(s)) return false;
+    adopt(s);
+    return true;
+  }
+
+  function doNewGame(): void {
+    const s = gather();
+    Save.newGame(s);
+    adopt(s);
+    Save.wipe();
   }
 
   // --- debug / display state ------------------------------------------------
-  let dayT = 0.79; // start at dusk so the lights read immediately
+  let dayT = Save.NEW_GAME.dayT; // starts at dusk so the lights read immediately
   let dayPaused = false;
   let showGrid = false;
   let showColliders = false;
@@ -486,6 +569,57 @@ function start(): void {
     fadeDir = -1;
   }
 
+  // --- title screen ---------------------------------------------------------
+  //
+  // Only shown when there is a save worth offering. With an empty slot the game
+  // boots straight into the valley the way it always has — a menu whose only
+  // option is "new game" is a door with nothing on the other side of it.
+  let titleMode: 'menu' | 'confirm' | null = null;
+  let titleIndex = 0;
+  let confirmIndex = 0;
+  let savedDay = 0;
+
+  {
+    const found = Save.peek(farm, scene.forage.length);
+    if (found) {
+      titleMode = 'menu';
+      savedDay = found.day;
+    }
+  }
+
+  function updateTitle(): void {
+    const move = input.pressed('w', 'arrowup', 's', 'arrowdown');
+    if (titleMode === 'menu') {
+      if (move) titleIndex = titleIndex === 0 ? 1 : 0;
+      if (input.pressed('e', 'enter')) {
+        if (titleIndex === 0) {
+          // `peek` validated this save already, so a failure here means the
+          // slot changed under us. Falling through to the fresh game is the
+          // same answer a bad save gets everywhere else.
+          doLoad();
+          titleMode = null;
+        } else {
+          titleMode = 'confirm';
+          confirmIndex = 0;
+        }
+      }
+      return;
+    }
+    if (move) confirmIndex = confirmIndex === 0 ? 1 : 0;
+    if (input.pressed('q', 'escape')) {
+      titleMode = 'menu';
+      return;
+    }
+    if (input.pressed('e', 'enter')) {
+      if (confirmIndex === 1) {
+        doNewGame();
+        titleMode = null;
+      } else {
+        titleMode = 'menu';
+      }
+    }
+  }
+
   const lights: Light[] = [];
   let time = 0;
   let last = performance.now();
@@ -517,6 +651,17 @@ function start(): void {
       },
       leave: leaveRoom,
       fishing,
+      social,
+      // Save hooks, so acceptance runs can exercise the real code paths without
+      // walking to a bed. `sleep` goes through `nextDay`, which is where the
+      // automatic save actually lives.
+      save: doSave,
+      load: doLoad,
+      wipe: Save.wipe,
+      newGame: doNewGame,
+      sleep: nextDay,
+      /** Exactly what would be written to the slot right now. */
+      snapshot: () => Save.serialize(gather()),
       state() {
         return {
           room: room?.kind ?? null,
@@ -524,6 +669,9 @@ function start(): void {
           shopIndex,
           gold: inv.gold,
           day,
+          dayT,
+          energy,
+          title: titleMode,
           fish: fishing.state,
           hooked: fishing.hooked?.id ?? null,
           progress: fishing.progress,
@@ -533,6 +681,17 @@ function start(): void {
   }
 
   function update(dt: number): void {
+    if (noticeT > 0 && (noticeT -= dt) <= 0) notice = null;
+
+    // The title screen owns everything while it is up: no walking, no tools,
+    // no clock. The world behind it still draws, it just does not run.
+    if (titleMode) {
+      updateTitle();
+      player.stop();
+      wheel = 0;
+      return;
+    }
+
     // What the hand is holding, refreshed before anything can return early so
     // the sprite is right even in the branches that skip the rest of the frame.
     // Only tools get drawn: a turnip in the fist reads as a bug, not a feature.
@@ -885,6 +1044,18 @@ function start(): void {
       ctx.strokeRect(BRIDGE.x0 - camX, BRIDGE.y0 - camY, BRIDGE.x1 - BRIDGE.x0, BRIDGE.y1 - BRIDGE.y0);
     }
 
+    // The menu replaces the HUD rather than sitting on top of it: at boot the
+    // clock and the hotbar are not yours to read yet.
+    if (titleMode) {
+      drawTitle(ctx, {
+        saveDay: savedDay,
+        index: titleIndex,
+        confirming: titleMode === 'confirm',
+        confirmIndex,
+      });
+      return;
+    }
+
     drawFade();
     drawHud(ctx, hudState());
     drawHotbar(ctx, assets, inv);
@@ -921,6 +1092,7 @@ function start(): void {
         if (!q.taken) return `NOTICE: ${q.title}`;
         return `${q.title}  ${questProgress(q, (i) => inv.count(i)).join('  ')}`;
       })(),
+      notice,
     };
   }
 
