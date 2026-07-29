@@ -13,7 +13,7 @@
  *   3. sparkle clusters on the fastest water
  *   4. a lacy shoreline built from the same lattice trick, plus a hard
  *      waterline pixel and a dark band where the bank shades the water
- *   5. foam rings and V-wakes around obstacles
+ *   5. an upstream foam crescent and a downstream V-wake at obstacles
  *
  * Everything is a lattice/hash lookup rather than a continuous function, which
  * is what keeps the marks discrete instead of smearing into contours.
@@ -80,6 +80,17 @@ const LAYERS: StrokeLayer[] = [
 const LEN_CHOICES = [3, 4, 6];
 /** Share of dashes rendered 2px thick instead of 1px. */
 const THICK_FRAC = 0.08;
+
+// --- obstacle foam ---------------------------------------------------------
+// White water piles up on the face a rock turns *into* the current and there
+// is none at all in its lee. The first version drew a closed circle at a fixed
+// radius, which read as a magnifying glass (or a swim ring) hung around every
+// river stone. The ring must never close.
+
+/** How far upstream the foam reaches when the flow hits a face dead-on. */
+const FOAM_REACH = 3.4;
+/** Cosine cutoff: past this the face is too oblique to hold any foam at all. */
+const FOAM_ARC = 0.16;
 
 export class River {
   private img: ImageData | null = null;
@@ -149,6 +160,16 @@ export class River {
     const px = this.buf32!;
     px.fill(0);
 
+    // Downstream direction at each obstacle, read off the centreline's tangent.
+    // The river runs north to south, so it is close to +y, but on a bend it
+    // leans — taking it from `riverCenter` keeps both the foam and the wake
+    // square to the actual current instead of to the screen.
+    const flow = this.obstacles.map((o) => {
+      const slope = (riverCenter(o.y + 6) - riverCenter(o.y - 6)) / 12;
+      const inv = 1 / Math.hypot(slope, 1);
+      return { ux: slope * inv, uy: inv };
+    });
+
     for (let sy = 0; sy < h; sy++) {
       const wy = sy + camY;
       const cx = riverCenter(wy);
@@ -209,18 +230,45 @@ export class River {
           else if (depth < reach + 1.4 && bite > 0.6) step = 4;
         }
 
-        // --- 5. obstacles: foam ring + downstream V-wake -------------------
-        for (const o of this.obstacles) {
+        // --- 5. obstacles: upstream foam crescent + downstream V-wake ------
+        for (let oi = 0; oi < this.obstacles.length; oi++) {
+          const o = this.obstacles[oi];
+          const f = flow[oi];
           const dx = wx - o.x;
           const dy = wy - o.y;
-          const dd = Math.hypot(dx, dy) - o.r;
-          if (dd < 2.6 && dd > -1) {
-            step = 5;
-          } else if (dy > 0 && dy < 34) {
-            const spread = o.r * 0.4 + dy * 0.45;
-            const edge = Math.abs(Math.abs(dx) - spread);
+          const len = Math.hypot(dx, dy) || 1e-4;
+          const dd = len - o.r;
+          // Flow-aligned coordinates: `along` is positive downstream of the
+          // stone, `across` is the lateral offset from its wake axis.
+          const along = dx * f.ux + dy * f.uy;
+          const across = dx * f.uy - dy * f.ux;
+          // How squarely this bearing meets the oncoming water: 1 dead
+          // upstream, 0 abeam, negative in the lee. The lee gets nothing.
+          const facing = -along / len;
+
+          if (facing > FOAM_ARC && dd > -1.4 && dd < FOAM_REACH) {
+            // Squared angular falloff, so the white water is deepest straight
+            // into the current and has already thinned to nothing well before
+            // the flanks — a crescent, not a ring. Both bounds of the band
+            // collapse together as the face turns away, so the arc terminates
+            // instead of tapering into a hairline that would close it up.
+            const wgt = (facing - FOAM_ARC) / (1 - FOAM_ARC);
+            const reach = FOAM_REACH * wgt * wgt;
+            if (dd < reach && dd > -1.4 * wgt) {
+              // Lattice hash again, same trick as the shoreline lace: the
+              // crescent is a scatter of 1-2px strokes washing downstream,
+              // not a solid stroked arc. Density falls off with the angle too.
+              const cellX = Math.floor(wx / 2) * 3 + oi * 101;
+              const cellY = Math.floor((wy + time * 6) / 2) * 7;
+              if (hash2(cellX, cellY) < 0.35 + 0.6 * wgt) {
+                step = wgt > 0.6 && dd < reach * 0.7 ? 5 : 4;
+              }
+            }
+          } else if (along > 0 && along < 34) {
+            const spread = o.r * 0.4 + along * 0.45;
+            const edge = Math.abs(Math.abs(across) - spread);
             if (edge < 1.6 && hash2(Math.floor(wx / 3), Math.floor((wy + time * 30) / 3)) > 0.35) {
-              step = dy < 16 ? 5 : 4;
+              step = along < 16 ? 5 : 4;
             }
           }
         }

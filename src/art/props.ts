@@ -203,31 +203,75 @@ export function bed(): PixelBuffer {
   b.fillRect(4, 9, 18, 25, R.paper[2]);
   b.vline(4, 9, 33, R.paper[3]);
   b.hline(4, 21, 9, R.paper[1]);
-  // Pillow: two bulges lit on the top-left, shaded underneath, with a crease
-  // between them so it reads as two and not as one bolster.
-  b.ellipse(8, 12, 4.4, 3.2, R.paper[3]);
-  b.ellipse(17, 12, 4.4, 3.2, R.paper[3]);
-  b.ellipse(7, 11, 3.4, 2.2, R.paper[4]);
-  b.ellipse(16, 11, 3.4, 2.2, R.paper[4]);
-  b.vline(12, 10, 14, R.paper[2]);
-  b.hline(4, 11, 15, R.paper[1]);
-  b.hline(13, 21, 15, R.paper[1]);
-  // Blanket: about two thirds of the mattress, tucked in at the sides, with a
-  // folded hem at the top and its own edge at the bottom.
+  // Pillows: a *top face* you look down on and a *front face* you look at, with
+  // a hard line between them. Two stacked ellipses gave a soft bulge shaded all
+  // the way round — pillow shading, rule 6 — which at this size is a white
+  // blob. Flat planes and one turn is what gives it volume.
+  for (const px of [5, 14]) {
+    b.fillRect(px, 10, 7, 4, R.paper[4]); // lit top face
+    b.fillRect(px, 14, 7, 2, R.paper[2]); // the turn: the front of the bolster
+    b.hline(px, px + 6, 16, R.paper[1]); // where it presses into the mattress
+    // Corners rounded off by one pixel each, and the two far corners let the
+    // sheet show through so the pillow is not a rectangle.
+    for (const [cx, cy] of [
+      [px, 10],
+      [px + 6, 10],
+    ] as [number, number][]) {
+      b.set(cx, cy, R.paper[2]);
+    }
+    b.hline(px + 1, px + 5, 10, R.paper[4]);
+    b.vline(px + 6, 11, 15, R.paper[3]); // the shaded right cheek
+    b.set(px, 15, R.paper[1]);
+  }
+  // The crease between the two pillows, and the shadow the near one throws.
+  b.vline(12, 10, 15, R.paper[1]);
+  b.vline(13, 11, 15, R.paper[2]);
+  // Blanket: about two thirds of the mattress, with a folded hem at the top.
   b.fillRect(4, 17, 18, 15, P.coat);
   b.fillRect(4, 17, 18, 2, P.coatLight);
   b.hline(4, 21, 19, P.coatDark);
   b.vline(4, 17, 31, P.coatLight);
   b.vline(21, 17, 31, P.coatDark);
+  // Folds. A blanket over a sleeper falls in ridges running *along* the body,
+  // and a ridge at this scale is two adjacent ramp steps meeting on a hard
+  // line: the left flank of the ridge faces the key light, the right flank
+  // faces away. No gradient, and never a straight line — each crease wanders a
+  // pixel as it runs, which is the only thing separating a fold from a stripe.
+  const fold = new RNG(77);
+  for (const start of [7, 12, 17]) {
+    let fx = start;
+    for (let y = 20; y < 31; y++) {
+      if (fold.chance(0.28)) fx += fold.chance(0.5) ? 1 : -1;
+      fx = Math.max(6, Math.min(19, fx));
+      b.set(fx, y, P.coatLight);
+      b.set(fx + 1, y, P.coatDark);
+    }
+  }
+  // One cross fold where the blanket bunches over the knees, broken so it does
+  // not read as a seam sewn across the bed.
+  for (let x = 5; x < 21; x++) {
+    if (x > 12 && x < 15) continue;
+    const wob = x % 7 === 3 ? 1 : 0;
+    b.set(x, 26 + wob, P.coatLight);
+    b.set(x, 27 + wob, P.coatDark);
+  }
+  // The blanket hangs over the side rails. Two pixels of overhang on the left,
+  // one on the right, with a ragged foot — a coverlet cut exactly to the frame
+  // is a fitted panel, not bedding.
+  for (let y = 22; y < 31; y++) {
+    b.set(3, y, P.coat);
+    if (y > 23 && y < 29) b.set(2, y, P.coatDark);
+    b.set(22, y, P.coatDark);
+  }
+  b.set(3, 21, P.coatLight);
   b.hline(4, 21, 31, P.coatDark);
-  // Two crease highlights: a fold catches light along its top edge only.
-  b.hline(6, 16, 23, P.coatLight);
-  b.set(17, 24, P.coatLight);
-  b.hline(9, 19, 27, P.coatLight);
-  b.set(8, 28, P.coatLight);
   // The sheet turned down at the foot — the white band that says "bed".
   b.fillRect(4, 32, 18, 2, R.paper[4]);
   b.hline(4, 21, 33, R.paper[2]);
+  // Two corners of the blanket dropped past the turned-down sheet, so the hem
+  // between them is a broken line rather than a ruled one.
+  b.hline(6, 10, 32, P.coatDark);
+  b.hline(15, 18, 32, P.coatDark);
   b.selOutline();
   return b;
 }

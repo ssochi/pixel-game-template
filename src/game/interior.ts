@@ -7,6 +7,13 @@
  * so the renderer draws it with exactly the same pipeline. The only differences
  * are that a room has fixed ambient light instead of a day/night cycle, and
  * that the camera centres a room smaller than the viewport instead of clamping.
+ *
+ * Because of that centring, the baked bitmap is deliberately *bigger* than the
+ * playable room: every room is surrounded by its own wall seen in cross-section
+ * and by the dark outside that wall (`paintSurround`). Without it the viewport
+ * filled the leftover space with flat black and the room read as a card
+ * floating in a void rather than as the inside of a building. The playable
+ * rectangle is unchanged — the surround is scenery the player can never reach.
  */
 import type { Assets } from '../art/assets';
 import {
@@ -20,10 +27,11 @@ import {
   type FloorKind,
   type WallKind,
 } from '../art/interiors';
-import { P, R } from '../art/palette';
-import { PixelBuffer } from '../art/pixel';
+import { P, R, type Ramp } from '../art/palette';
+import { bayer, PixelBuffer } from '../art/pixel';
 import { clip, type Clip, type Sheet } from '../art/sheet';
-import { RNG } from '../engine/rng';
+import { hash2, RNG } from '../engine/rng';
+import { GAME_H, GAME_W } from '../engine/screen';
 import type { Light } from './lighting';
 import type { Deco, Solid } from './scene';
 
@@ -85,6 +93,74 @@ const SPEC: Record<RoomKind, RoomSpec> = {
 /** Wall band height at the top of the room. */
 const WALL_H = 44;
 
+/**
+ * The surround: how thick the wall is where it is cut through, how deep its
+ * outer face sits in shadow, and the least amount of outside drawn beyond it.
+ *
+ * `MIN_MARGIN` only bites on the one axis of the one room (the chapel's height)
+ * that is nearly as large as the viewport already; everywhere else the margin
+ * grows until the baked bitmap covers the screen, so there is no frame in which
+ * the renderer's clear colour is visible at all.
+ */
+const WALL_T = 3;
+const EAVE_T = 2;
+const MIN_MARGIN = 24;
+
+/** What the wall is made of where it is cut through, per `WallKind`. */
+const WALL_MAT: Record<WallKind, Ramp> = {
+  plaster: R.stone,
+  stone: R.stone,
+  brick: R.red,
+  log: R.wood,
+};
+
+/** Margin on one side of an axis: enough to cover the viewport where possible. */
+function margin(size: number, view: number): number {
+  return Math.max(MIN_MARGIN, Math.ceil((view - size) / 2));
+}
+
+/**
+ * Shift a finished room's every coordinate by the same amount.
+ *
+ * `furnish` places props in room-local pixels — `room.w - 34`, `wallY + 42` —
+ * and there are a couple of hundred of them. Rather than teach each one about
+ * the surround, the room is built and dressed at its own origin and then moved
+ * bodily into the padded bitmap. Everything the game reads afterwards is listed
+ * here; miss one and a lamp lights the wrong wall or the player spawns in the
+ * masonry.
+ */
+function offsetRoom(room: Room, dx: number, dy: number): void {
+  for (const d of room.decos) {
+    d.x += dx;
+    d.y += dy;
+    d.sortY += dy;
+  }
+  for (const s of room.solids) {
+    s.x += dx;
+    s.y += dy;
+  }
+  for (const l of room.lights) {
+    l.x += dx;
+    l.y += dy;
+  }
+  for (const n of room.npcs) {
+    n.x += dx;
+    n.y += dy;
+  }
+  room.spawnX += dx;
+  room.spawnY += dy;
+  room.exit.x += dx;
+  room.exit.y += dy;
+  room.bounds.x0 += dx;
+  room.bounds.x1 += dx;
+  room.bounds.y0 += dy;
+  room.bounds.y1 += dy;
+  if (room.bed) {
+    room.bed.x += dx;
+    room.bed.y += dy;
+  }
+}
+
 export class RoomBuilder {
   private cache = new Map<string, Room>();
 
@@ -103,6 +179,8 @@ export class RoomBuilder {
     const spec = SPEC[kind];
     const rng = new RNG(seed * 7919 + 13);
     const buf = new PixelBuffer(spec.w, spec.h);
+    const dw = 24;
+    const dx = Math.round(spec.w / 2 - dw / 2);
 
     // Floor first, then the floor's own history, then the wall band over the
     // top of both.
@@ -120,8 +198,6 @@ export class RoomBuilder {
     // spawned half-hidden behind it and the thing read as furniture, not exit.
     buf.fillRect(0, spec.h - 5, spec.w, 5, R.night[1]);
     buf.hline(0, spec.w - 1, spec.h - 5, R.night[2]);
-    const dw = 24;
-    const dx = Math.round(spec.w / 2 - dw / 2);
     // The opening: floor runs out through the gap.
     buf.fillRect(dx, spec.h - 5, dw, 5, R.wood[1]);
     buf.hline(dx, dx + dw - 1, spec.h - 5, R.wood[2]);
@@ -139,11 +215,20 @@ export class RoomBuilder {
       buf.fillRect(6, y, spec.w - 12, 1, [10, 10, 20, a]);
     }
 
+    // The building from outside, and the room dropped into the middle of it.
+    // Built before the Room so the bitmap is only flattened to a canvas once;
+    // the room is dressed at its own origin and moved into place at the end.
+    const padX = margin(spec.w, GAME_W);
+    const padY = margin(spec.h, GAME_H);
+    const outer = new PixelBuffer(spec.w + padX * 2, spec.h + padY * 2);
+    this.paintSurround(outer, spec, padX, padY, dx, dw, rng);
+    outer.blit(buf, padX, padY);
+
     const room: Room = {
       kind,
       w: spec.w,
       h: spec.h,
-      ground: buf.toCanvas(),
+      ground: outer.toCanvas(),
       decos: [],
       solids: [],
       lights: [],
@@ -161,8 +246,115 @@ export class RoomBuilder {
     // bottom wall, baked into the ground bitmap above.
     this.add(room, this.a.interiors.mat, room.w / 2, room.h - 8, { layer: 'ground' });
 
+    // Everything above was authored in room-local pixels. Move it all into the
+    // padded bitmap in one go — including `bounds`, which is what keeps the
+    // player off the wall and out of the dark beyond it.
+    offsetRoom(room, padX, padY);
+    room.w = outer.w;
+    room.h = outer.h;
+
     room.decos.sort((p, q) => p.sortY - q.sortY);
     return room;
+  }
+
+  /**
+   * The wall in cross-section, and the outside beyond it.
+   *
+   * A room smaller than the viewport gets centred, and the renderer fills what
+   * is left over with flat black — so every interior read as a lit card hung in
+   * a void. The fix is not a bigger room (the room's size is what all the
+   * furniture is placed against) but a bigger *bitmap*: cut the wall through
+   * and show its thickness from above, drop its outer face into shadow, and let
+   * the rest fall away into the darkest neutral on the palette instead of into
+   * nothing. Four bands, outward from the floor:
+   *
+   *   1. `WALL_T` px of masonry/timber top surface, lit on the inside edge
+   *      where the room's own lamps reach it, coursed so it reads as built.
+   *   2. `EAVE_T` px of the same material at the bottom of its ramp: the
+   *      outside face of the wall, which nothing indoors lights.
+   *   3. A dithered falloff from `night[1]` to `night[0]` — near the building
+   *      is fractionally less dark than far from it.
+   *   4. The far field, with very sparse rubble clusters so a third of the
+   *      screen is not one dead flat colour.
+   *
+   * The doorway is cut clean through all of it, so the way out still reads as
+   * a way out and not as a scuff on the skirting.
+   */
+  private paintSurround(
+    b: PixelBuffer,
+    spec: RoomSpec,
+    padX: number,
+    padY: number,
+    doorX: number,
+    doorW: number,
+    rng: RNG,
+  ): void {
+    const mat = WALL_MAT[spec.wall];
+    const x0 = padX;
+    const y0 = padY;
+    const x1 = padX + spec.w - 1;
+    const y1 = padY + spec.h - 1;
+    const shell = WALL_T + EAVE_T;
+    /** Chebyshev distance outside the room rectangle; <= 0 means inside it. */
+    const out = (x: number, y: number): number => Math.max(x0 - x, x - x1, y0 - y, y - y1);
+
+    b.fill(R.night[0]);
+
+    // Band 3: one step up close to the building, dithered out over 20px. The
+    // wall has to sit against *something* or its outer face is invisible.
+    const reach = 20;
+    for (let y = 0; y < b.h; y++) {
+      for (let x = 0; x < b.w; x++) {
+        const d = out(x, y);
+        if (d <= shell) continue;
+        const t = 1 - (d - shell) / reach;
+        if (t > 0 && t > bayer(x, y)) b.set(x, y, R.night[1]);
+      }
+    }
+
+    // Band 4: rubble. Clusters of two or three, never single pixels — a spray
+    // of lone dots reads as dirt on the screen rather than as ground.
+    const clusters = Math.round((b.w * b.h) / 3400);
+    for (let i = 0; i < clusters; i++) {
+      const px = rng.int(2, b.w - 3);
+      const py = rng.int(2, b.h - 3);
+      if (out(px, py) < shell + reach * 0.5) continue;
+      const core = rng.chance(0.25) ? R.night[2] : R.night[1];
+      b.set(px, py, core);
+      b.set(px + rng.int(-1, 1), py + 1, R.night[1]);
+      if (rng.chance(0.5)) b.set(px + rng.int(0, 1), py - 1, R.night[1]);
+    }
+
+    // Bands 1 and 2: the wall itself.
+    for (let y = y0 - shell; y <= y1 + shell; y++) {
+      for (let x = x0 - shell; x <= x1 + shell; x++) {
+        const d = out(x, y);
+        if (d <= 0 || d > shell) continue;
+        if (d > WALL_T) {
+          b.set(x, y, mat[0]);
+          continue;
+        }
+        // Coursing runs along the wall, so the run direction depends on which
+        // side of the building this is; corners take the horizontal courses.
+        const along = y < y0 || y > y1 ? x : y;
+        // Joints stagger between the inner and outer courses.
+        const joint = (along + (d > 1 ? 6 : 0)) % 11 === 0;
+        let c = joint ? mat[0] : d === 1 ? mat[2] : mat[1];
+        if (!joint && hash2(along >> 1, d) > 0.86) c = d === 1 ? mat[3] : mat[2];
+        b.set(x, y, c);
+      }
+    }
+
+    // The threshold, cut through the bottom wall under the doorway and running
+    // a few pixels out into the dark so the exit doesn't stop at a hard line.
+    const dx0 = x0 + doorX;
+    for (let x = dx0; x < dx0 + doorW; x++) {
+      for (let d = 1; d <= shell; d++) b.set(x, y1 + d, d <= WALL_T ? R.wood[1] : R.wood[0]);
+      for (let d = shell + 1; d <= shell + 6; d++) {
+        const t = 1 - (d - shell) / 7;
+        if (t > bayer(x, y1 + d)) b.set(x, y1 + d, R.wood[0]);
+      }
+    }
   }
 
   // -------------------------------------------------------------------------

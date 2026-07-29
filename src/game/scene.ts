@@ -142,6 +142,21 @@ export class Scene {
     this.lights.push({ seed: l.seed ?? this.lightSeed++ * 13.7, ...l });
   }
 
+  /**
+   * One bay of fence.
+   *
+   * All the irregularity lives in the sprite variants (see `fenceSegment` in
+   * `buildings.ts`), so a run is just this called in a loop — but because the
+   * bay is picked at random the run never repeats one picket, which is what
+   * made the old fences read as ladders lying in the grass. Corners take the
+   * heavy post.
+   */
+  private fenceBay(rng: RNG, x: number, y: number, corner = false): void {
+    const f = this.a.buildings.fence;
+    const sheet = corner ? f.corner : rng.chance(0.07) ? f.broken : f.bays[rng.int(0, f.bays.length - 1)];
+    this.add(sheet, x, y, { solid: 6, label: 'fence' });
+  }
+
   // -------------------------------------------------------------------------
 
   /**
@@ -450,7 +465,6 @@ export class Scene {
 
   private buildFarms(): void {
     const b = this.a.buildings;
-    const p = this.a.props;
 
     // Barn on the farm track west of the paddock. It used to stand at (380,800)
     // — inside the paddock, straddling its own north fence — which the rescaled
@@ -459,38 +473,77 @@ export class Scene {
     this.placeBuilding(b.barn, 232, 872, 'barn', undefined, 'barn');
 
     // Crops, laid in rows that follow each field's furrows.
+    //
+    // Not one stamp tiled across a rectangle — that is the single thing that
+    // made these fields read as wallpaper at 4x. A sown field is irregular in
+    // four ways, and none of them costs anything:
+    //
+    //  - **rows wander.** Each row carries its own cross-row offset and its own
+    //    start phase along the row, so no two rows line up into a grid.
+    //  - **no two plants match.** Height comes from the tall/short variants,
+    //    orientation from a coin flip.
+    //  - **the edges are ragged.** A plant's chance of existing falls away over
+    //    the last 16px on every side, so the block ends in a broken fringe
+    //    instead of a guillotined line, and the baulk between two fields comes
+    //    out irregular for free.
+    //  - **things go wrong.** Whole stretches of a row are simply missing (a
+    //    drill that blocked), and near the margins the odd plant has been
+    //    flattened by the wind.
+    const crops = new RNG(4801);
     for (const f of FIELDS) {
       if (f.crop === 'fallow') continue;
-      const set = f.crop === 'wheat' ? b.wheat : b.cabbage;
+      const upright = f.crop === 'wheat' ? b.wheat : b.cabbage;
+      const lodged = f.crop === 'wheat' ? b.wheatLodged : b.cabbageLodged;
       const stepX = f.vertical ? 14 : 16;
       const stepY = f.vertical ? 16 : 14;
       for (let y = f.y0 + 10; y < f.y1 - 6; y += stepY) {
-        for (let x = f.x0 + 10; x < f.x1 - 6; x += stepX) {
+        const rowOff = crops.int(-2, 2);
+        const phase = crops.range(0, stepX);
+        // Every third row or so has a bare stretch somewhere along it.
+        const gapAt = crops.chance(0.35) ? crops.range(f.x0, f.x1) : -1e9;
+        const gapW = crops.range(14, 34);
+        for (let x = f.x0 + 10 + phase; x < f.x1 - 6; x += stepX) {
           if (isWater(x, y)) continue;
-          this.add(set[this.rng.int(0, set.length - 1)], x, y, {
+          if (Math.abs(x - gapAt) < gapW / 2) continue;
+          const edge = Math.min(x - f.x0, f.x1 - x, y - f.y0, f.y1 - y);
+          if (edge < 16 && crops.next() > 0.25 + (edge / 16) * 0.75) continue;
+          const set = edge < 22 && crops.chance(0.12) ? lodged : upright;
+          this.add(set[crops.int(0, set.length - 1)], x + crops.int(-2, 2), y + rowOff + crops.int(-1, 1), {
             layer: 'sorted',
             label: f.crop,
-            phase: this.rng.range(0, 4),
+            flip: crops.chance(0.5),
+            phase: crops.range(0, 4),
           });
         }
       }
-      // Scarecrow and haystacks on the headland.
-      this.add(b.scarecrow, (f.x0 + f.x1) / 2, f.y0 + 6, { solid: 5, label: 'scarecrow' });
+      // Scarecrow on the headland, off-centre so the three of them don't line
+      // up with each other across the valley.
+      this.add(b.scarecrow, (f.x0 + f.x1) / 2 + crops.int(-14, 14), f.y0 + 6, { solid: 5, label: 'scarecrow' });
     }
     this.add(b.haystacks[0], 352, 300, { solid: 12, label: 'haystack' });
     this.add(b.haystacks[1], 150, 470, { solid: 12, label: 'haystack' });
     this.add(b.haystacks[0], 500, 760, { solid: 12, label: 'haystack', flip: true });
 
-    // Paddock fence, with a gap for a gate on the north side.
+    // Paddock fence, with a gap for a gate on the north side. Corners last, so
+    // the heavy post is drawn over the ends of both runs meeting there.
+    const fences = new RNG(5150);
     const step = 16;
-    for (let x = PADDOCK.x0; x <= PADDOCK.x1; x += step) {
+    for (let x = PADDOCK.x0 + step; x < PADDOCK.x1; x += step) {
       if (Math.abs(x - (PADDOCK.x0 + PADDOCK.x1) / 2) < 20) continue;
-      this.add(p.fence, x, PADDOCK.y0, { solid: 6, label: 'fence' });
-      this.add(p.fence, x, PADDOCK.y1, { solid: 6, label: 'fence' });
+      this.fenceBay(fences, x, PADDOCK.y0);
+      this.fenceBay(fences, x, PADDOCK.y1);
     }
-    for (let y = PADDOCK.y0; y <= PADDOCK.y1; y += step) {
-      this.add(p.fence, PADDOCK.x0, y, { solid: 6, label: 'fence' });
-      this.add(p.fence, PADDOCK.x1, y, { solid: 6, label: 'fence' });
+    for (let y = PADDOCK.y0 + step; y < PADDOCK.y1; y += step) {
+      this.fenceBay(fences, PADDOCK.x0, y);
+      this.fenceBay(fences, PADDOCK.x1, y);
+    }
+    for (const [cx, cy] of [
+      [PADDOCK.x0, PADDOCK.y0],
+      [PADDOCK.x1, PADDOCK.y0],
+      [PADDOCK.x0, PADDOCK.y1],
+      [PADDOCK.x1, PADDOCK.y1],
+    ] as [number, number][]) {
+      this.fenceBay(fences, cx, cy, true);
     }
 
     // Livestock in the paddock, poultry loose around the farmyard.
@@ -532,24 +585,60 @@ export class Scene {
     });
   }
 
-  /** The player's own plot: fenced, with a shipping bin and a scarecrow. */
+  /**
+   * The player's own plot.
+   *
+   * This is the first thing anyone sees, and until now it was a fenced
+   * rectangle of bare lawn — which reads as a building plot for sale, not as a
+   * farm. Two halves fix that: `farm.ts` presets a broken-in corner of tilled
+   * soil with something growing on it, and everything below is the clutter that
+   * goes with it. The plot has to read as somebody's yard on their second day.
+   */
   private buildFarmPlot(): void {
     const p = this.a.props;
+    const b = this.a.buildings;
+    const fences = new RNG(7311);
     const step = 16;
-    for (let x = FARM.x0 - 8; x <= FARM.x1 + 8; x += step) {
-      // Gap on the west side, facing the town, so you can walk in.
-      if (Math.abs(x - (FARM.x0 - 8)) < 1) continue;
-      this.add(p.fence, x, FARM.y0 - 8, { solid: 6, label: 'fence' });
-      this.add(p.fence, x, FARM.y1 + 8, { solid: 6, label: 'fence' });
+    const X0 = FARM.x0 - 8;
+    const X1 = FARM.x1 + 8;
+    const Y0 = FARM.y0 - 8;
+    const Y1 = FARM.y1 + 8;
+    for (let x = X0 + step; x < X1; x += step) {
+      this.fenceBay(fences, x, Y0);
+      this.fenceBay(fences, x, Y1);
     }
-    for (let y = FARM.y0 - 8; y <= FARM.y1 + 8; y += step) {
-      if (Math.abs(y - (FARM.y0 + 56)) < 10) continue; // gateway
-      this.add(p.fence, FARM.x0 - 8, y, { solid: 6, label: 'fence' });
-      this.add(p.fence, FARM.x1 + 8, y, { solid: 6, label: 'fence' });
+    for (let y = Y0 + step; y < Y1; y += step) {
+      // The gateway, on the west side facing the town.
+      if (Math.abs(y - (FARM.y0 + 56)) < 10) continue;
+      this.fenceBay(fences, X0, y);
+      this.fenceBay(fences, X1, y);
     }
+    // Corners last, so the heavy post covers the ends of both runs meeting it.
+    for (const [cx, cy] of [
+      [X0, Y0],
+      [X1, Y0],
+      [X0, Y1],
+      [X1, Y1],
+    ] as [number, number][]) {
+      this.fenceBay(fences, cx, cy, true);
+    }
+
     this.bin = this.add(p.chestClosed, FARM.x0 - 20, FARM.y0 + 40, { solid: 8, label: 'shipping bin' });
-    this.add(this.a.buildings.scarecrow, FARM.x1 - 24, FARM.y0 + 8, { solid: 5, label: 'scarecrow' });
+    this.add(b.scarecrow, FARM.x1 - 24, FARM.y0 + 8, { solid: 5, label: 'scarecrow' });
     this.add(p.sign, FARM.x0 - 22, FARM.y0 + 70, { solid: 4, label: 'plot sign' });
+
+    // Work in progress. All of it sits clear of the tilled corner (cols 1-3,
+    // rows 2-5 of the grid — x 720..772, y 624..692) so nothing stands on a
+    // tile the player is meant to be able to hoe.
+    this.add(b.haystacks[0], FARM.x1 - 30, FARM.y1 - 12, { solid: 11, label: 'haystack' });
+    this.add(b.haystacks[1], FARM.x1 - 56, FARM.y1 - 2, { solid: 11, label: 'haystack', flip: true });
+    this.add(p.crates[0], FARM.x0 + 18, FARM.y1 - 6, { solid: 8, label: 'seed crate' });
+    this.add(p.crates[1], FARM.x0 + 33, FARM.y1 - 1, { solid: 8, label: 'seed crate' });
+    this.add(p.barrels[0], FARM.x1 - 10, FARM.y0 + 20, { solid: 8, label: 'water butt' });
+    // Tools left out by the gate. No collision — they are a read, not an
+    // obstacle, and the gateway is the one place the player must get through.
+    this.add(this.a.farm.tools.hoe, FARM.x0 + 8, FARM.y0 + 28, { sortY: FARM.y0 + 32, label: 'hoe' });
+    this.add(this.a.farm.tools.can, FARM.x0 + 9, FARM.y0 + 74, { sortY: FARM.y0 + 78, label: 'watering can' });
   }
 
   private buildRiver(): void {
@@ -719,16 +808,24 @@ export class Scene {
       this.light({ x, y: y - 6, radius: 34, color: P.magic, intensity: 0.55, pulse: 0.5, pulseSpeed: 2.4 });
     }
 
-    // A campfire camp on the far bank, and the chest.
+    // Somebody's camp on the far bank: a fire, a log to sit on, a crate and a
+    // chest with their kit in it.
+    //
+    // What used to be here as well was a potion bottle, a loose gem and a coin
+    // hovering over the grass — display pieces left over from the shooter this
+    // engine started life as. In a farming game they state nothing: there is no
+    // pick-up, no drop table and nothing that makes loose treasure lying in a
+    // field mean anything. The *sprites* all still exist and are still in the
+    // gallery (`props.ts` is untouched); they are simply no longer furniture in
+    // the world. The fire, the log and the chest stay, because together those
+    // three do say something — someone sleeps out here.
     this.add(this.a.props.campfire, 1290, 640, { solid: 9, label: 'campfire' });
     this.light({ x: 1290, y: 630, radius: 122, color: P.fire, intensity: 1.2, flicker: 0.26 });
     this.smoke.push({ x: 1290, y: 622, rate: 4 });
     this.add(n.log, 1290, 668, { solid: 9, label: 'log' });
     this.chest = this.add(this.a.props.chestClosed, 1256, 626, { solid: 8, label: 'chest (E to open)' });
-    this.add(this.a.props.potions[1], 1316, 618, { label: 'potion' });
-    this.add(this.a.props.coin, 1274, 660, { label: 'coin' });
-    this.add(this.a.props.gems[0], 1330, 656, { label: 'gem' });
-    this.light({ x: 1330, y: 652, radius: 30, color: P.magic, intensity: 0.5, pulse: 0.5, pulseSpeed: 3 });
+    this.add(this.a.props.crates[0], 1322, 622, { solid: 8, label: 'crate' });
+    this.add(this.a.props.barrels[1], 1266, 600, { solid: 8, label: 'barrel' });
 
     // Old ruins in the north-west corner, reusing the wall pieces.
     for (let i = 0; i < 8; i++) {

@@ -18,40 +18,128 @@ import { RNG, fbm, hash2 } from '../engine/rng';
 
 export type FloorKind = 'plank' | 'tile' | 'stone' | 'straw';
 
-/** Paint a floor directly into a room bitmap. Tiles seamlessly by construction. */
+/** Board pitch for a plank floor. `floorPatches` lands its repairs on this grid. */
+export const BOARD_H = 10;
+
+const clampStep = (s: number): number => (s < 0 ? 0 : s > 4 ? 4 : s);
+
+/**
+ * Per-course board layout for a plank floor.
+ *
+ * The old floor was one board length — the whole room — repeated at a perfect
+ * 10px pitch with a bright arris on every course, so from the left wall to the
+ * right wall it was a run of evenly spaced light/dark stripes. That is a deck,
+ * not a floor. Boards come out of a stack in whatever lengths the sawyer had:
+ * every course is cut into 12-28px runs, each course starts part-way into a
+ * board so the butt joints never line up with the course above, and each run
+ * gets its own tone a step either side of the base. `lit` is what breaks the
+ * last of the periodicity: only about half the boards take a lit top arris, so
+ * the eye stops finding a rhythm to lock onto.
+ */
+function plankLayout(w: number, courses: number, base: number): { tone: Int8Array; flag: Uint8Array } {
+  const tone = new Int8Array(courses * w);
+  const flag = new Uint8Array(courses * w);
+  for (let bi = 0; bi < courses; bi++) {
+    const rng = new RNG((base + bi) * 9176 + 37);
+    let x = -rng.int(2, 26);
+    while (x < w) {
+      const len = rng.int(12, 28);
+      const t = rng.int(-1, 1);
+      const lit = rng.chance(0.45) ? 2 : 0;
+      const end = Math.min(w, x + len);
+      for (let i = Math.max(0, x); i < end; i++) {
+        tone[bi * w + i] = t;
+        flag[bi * w + i] = lit;
+      }
+      if (x >= 0 && x < w) flag[bi * w + x] |= 1; // butt joint
+      x += len;
+    }
+  }
+  return { tone, flag };
+}
+
+/**
+ * Cut an axis into tiles of jittered size. Returns, per pixel along the axis,
+ * the tile index, the distance from its near edge and the distance from its far
+ * edge — enough to grout, light and chip each tile independently.
+ *
+ * A flagged floor laid to the millimetre reads as graph paper, and rule 7's
+ * point about regular top-down brickwork reading as a *wall* applies just as
+ * hard indoors: the chapel's 12px chequer was the most rigid surface in the
+ * game.
+ */
+function tileAxis(n: number, seed: number, lo: number, hi: number): { idx: Int32Array; near: Int32Array; far: Int32Array } {
+  const idx = new Int32Array(n);
+  const near = new Int32Array(n);
+  const far = new Int32Array(n);
+  const rng = new RNG(seed);
+  let p = -rng.int(0, lo);
+  let t = 0;
+  while (p < n) {
+    const size = rng.int(lo, hi);
+    for (let i = Math.max(0, p); i < Math.min(n, p + size); i++) {
+      idx[i] = t;
+      near[i] = i - p;
+      far[i] = p + size - 1 - i;
+    }
+    p += size;
+    t++;
+  }
+  return { idx, near, far };
+}
+
+/** Paint a floor directly into a room bitmap. */
 export function paintFloor(b: PixelBuffer, x0: number, y0: number, w: number, h: number, kind: FloorKind): void {
+  const courses = Math.ceil((h + y0) / BOARD_H) + 2;
+  const plank = kind === 'plank' ? plankLayout(w, courses, Math.floor(y0 / BOARD_H)) : null;
+  const tileX = kind === 'tile' ? tileAxis(w, 4211, 10, 15) : null;
+  const tileY = kind === 'tile' ? tileAxis(h, 7717, 9, 14) : null;
   for (let j = 0; j < h; j++) {
     for (let i = 0; i < w; i++) {
       const x = x0 + i;
       const y = y0 + j;
       let c: RGBA;
-      if (kind === 'plank') {
-        // Floorboards: long strips with a seam and a lit top edge. The first
-        // version also drew staggered end joints every 41px, which turned the
-        // floor into a brick lattice — a floor seen from above is boards, and
-        // boards are long.
-        // Long boards, seam + lit edge, and *no vertical joints at all*. The
-        // joints were what turned the floor into brickwork; a floor seen from
-        // above is boards running the length of the room.
-        const board = Math.floor(j / 10);
-        const within = j % 10;
-        let step = 3;
-        if (within === 0) step = 2; // seam
-        else if (within === 1) step = 4; // lit edge of the board
-        else if (within === 9) step = 2;
-        if (hash2(i, board) > 0.985) step = Math.max(2, step - 1); // knot
-        c = R.wood[step];
-      } else if (kind === 'tile') {
-        const tx = Math.floor(i / 12);
-        const ty = Math.floor(j / 12);
-        const lx = i % 12;
-        const ly = j % 12;
-        const alt = (tx + ty) % 2 === 0;
-        let step = alt ? 3 : 2;
-        if (lx === 0 || ly === 0) step = 1;
-        else if (lx === 1 || ly === 1) step += 1;
-        else if (lx === 11 || ly === 11) step -= 1;
-        c = R.stone[Math.max(0, Math.min(4, step))];
+      if (kind === 'plank' && plank) {
+        const course = Math.floor(j / BOARD_H);
+        const within = j - course * BOARD_H;
+        const k = course * w + i;
+        const flag = plank.flag[k];
+        let step = 2 + plank.tone[k];
+        // One dark pixel between courses, and that is the whole seam — the old
+        // floor put a dark row *and* a second dark row nine pixels later, which
+        // is what banded the room.
+        if (within === 0) step -= 1;
+        else if (within === 1 && (flag & 2) !== 0) step += 1;
+        // The butt joint: a single dark pixel down the end of the board.
+        if (within > 0 && (flag & 1) !== 0) step -= 1;
+        // Grain and knots, in 2px streaks rather than single specks.
+        else if (within > 1 && hash2(x >> 1, y * 3 + course) > 0.955) step -= 1;
+        c = R.wood[clampStep(step)];
+      } else if (kind === 'tile' && tileX && tileY) {
+        const ti = tileX.idx[i];
+        const tj = tileY.idx[j];
+        const lx = tileX.near[i];
+        const ly = tileY.near[j];
+        const rx = tileX.far[i];
+        const ry = tileY.far[j];
+        const n = hash2(ti, tj);
+        // Base chequer, with a few flags out of a different batch.
+        let step = (ti + tj) % 2 === 0 ? 3 : 2;
+        if (n > 0.88) step += 1;
+        else if (n < 0.18) step -= 1;
+        if (lx === 0 || ly === 0) step = 1; // 1px joint
+        else if ((lx === 1 || ly === 1) && n > 0.38) step += 1; // lit arris, not on every flag
+        else if (rx === 0 || ry === 0) step -= 1;
+        // Chipped corners. A floor this old with not one broken flag in it is
+        // the giveaway that nobody laid it.
+        const chip = hash2(ti * 7 + 3, tj * 11 + 5);
+        if (chip > 0.8) {
+          const corner = Math.floor(hash2(ti + 5, tj + 9) * 4) & 3;
+          const cx = corner & 1 ? rx : lx;
+          const cy = corner & 2 ? ry : ly;
+          if (cx + cy < (chip > 0.93 ? 3 : 2)) step = 1;
+        }
+        c = R.stone[clampStep(step)];
       } else if (kind === 'straw') {
         const n = hash2(i, Math.floor(j / 2));
         c = R.sand[n > 0.8 ? 3 : n > 0.35 ? 2 : 1];
@@ -187,11 +275,14 @@ export function floorPatches(
       }
       continue;
     }
-    const pw = rng.int(28, 62);
+    const pw = rng.int(20, 40);
     const px = x0 + rng.int(8, Math.max(9, w - pw - 8));
-    const ph = 10;
+    const ph = BOARD_H;
     // A patch board has to sit *on* the board grid, or it reads as a stain.
-    const py = y0 + Math.floor(rng.int(0, Math.max(1, h - 14)) / 10) * 10;
+    // The grid is absolute (`paintFloor` counts courses from y=0), so the snap
+    // has to be absolute too — snapping relative to `y0` put every repair six
+    // pixels out and turned all three of them into oblong smudges.
+    const py = Math.max(y0, Math.floor((y0 + rng.int(0, Math.max(1, h - 14))) / BOARD_H) * BOARD_H);
     // Boards only ever go *darker*. A board a step lighter than its neighbours
     // reads as a highlight lying on the floor, not as different timber — the
     // room is lit from lamps overhead, so nothing down there gets brighter.
@@ -562,17 +653,139 @@ export function sacks(seed: number): PixelBuffer {
   return b;
 }
 
-/** A rug that sits under furniture; flat, no shadow. */
-export function roomRug(w: number, h: number, ramp: Ramp): PixelBuffer {
+/**
+ * 2-3px weave figures, stamped on a jittered lattice exactly as the outdoor
+ * grass is (rule 4). `l` takes the bright thread, `d` the dark one.
+ */
+const RUG_MOTIFS: string[][] = [
+  ['.l.', 'ldl', '.l.'],
+  ['l.l', '.d.', 'l.l'],
+  ['ld', 'dl'],
+  ['.l.', 'ld.'],
+  ['ll'],
+  ['l', 'l'],
+  ['.d.', 'd.d'],
+];
+
+/** The hand-dotted centre figure. Under 12px, so per rule 8 it is placed pixel
+ *  by pixel rather than assembled out of rectangles. */
+const RUG_MEDALLION = [
+  '.....d.....',
+  '....dhd....',
+  '...dhlhd...',
+  '..dhl.lhd..',
+  '.dhl.d.lhd.',
+  '..dhl.lhd..',
+  '...dhlhd...',
+  '....dhd....',
+  '.....d.....',
+];
+
+const RUG_MEDALLION_SMALL = ['..d..', '.dhd.', 'dhlhd', '.dhd.', '..d..'];
+
+/**
+ * A rug that sits under furniture; flat, no shadow.
+ *
+ * The old one was five concentric rectangles, which is a target, not a textile:
+ * on the shop's floorboards the purple one read as a magenta sticker somebody
+ * had dropped. A rug is legible from four things and they are all texture, not
+ * shape — a woven ground with a visible rib, small figures repeated across the
+ * field with bare ground between them, a fringe of loose thread at the edge,
+ * and the fact that the middle is walked on and the corners are not.
+ */
+export function roomRug(w: number, h: number, ramp: Ramp, seed = 1): PixelBuffer {
+  const rng = new RNG(seed * 137 + 29);
   const b = new PixelBuffer(w, h);
-  b.fillRect(0, 0, w, h, ramp[1]);
-  b.fillRect(1, 1, w - 2, h - 2, ramp[2]);
-  b.fillRect(4, 3, w - 8, h - 6, ramp[1]);
-  b.fillRect(6, 4, w - 12, h - 8, ramp[3]);
-  b.fillRect(Math.round(w / 2) - 3, Math.round(h / 2) - 2, 6, 4, ramp[1]);
-  for (let x = 1; x < w - 1; x += 3) {
-    b.set(x, 0, ramp[0]);
-    b.set(x, h - 1, ramp[0]);
+  // Rows 0-1 and the last two are left for the fringe; the pile is what's left.
+  const y0 = 2;
+  const y1 = h - 3;
+  // --- Ground weave --------------------------------------------------------
+  // A rib that steps sideways row by row. A flat fill is a sticker and
+  // per-pixel noise is static; cloth is a regular structure seen slightly out
+  // of register with itself.
+  for (let y = y0; y <= y1; y++) {
+    for (let x = 0; x < w; x++) {
+      const rib = (x + (y % 2) * 2 + Math.floor(y / 6)) % 5 === 0;
+      b.set(x, y, rib ? ramp[1] : ramp[2]);
+    }
+  }
+  // --- Figures across the field -------------------------------------------
+  const medW = w >= 40 ? 11 : 5;
+  const medH = w >= 40 ? 9 : 5;
+  const mx0 = Math.round((w - medW) / 2);
+  const my0 = Math.round((h - medH) / 2);
+  const cell = 7;
+  for (let cy = y0 + 1; cy < y1 - 2; cy += cell) {
+    for (let cx = 1; cx < w - 3; cx += cell) {
+      const px = cx + rng.int(0, 2);
+      const py = cy + rng.int(0, 2);
+      // A quarter of the cells stay bare. The negative space is what stops the
+      // figures joining up into a second flat colour.
+      if (rng.chance(0.26)) continue;
+      // Keep clear of the medallion, with a ring of plain ground round it.
+      if (px > mx0 - 4 && px < mx0 + medW + 2 && py > my0 - 4 && py < my0 + medH + 2) continue;
+      const m = rng.pick(RUG_MOTIFS);
+      const light = rng.chance(0.55) ? ramp[4] : ramp[3];
+      for (let j = 0; j < m.length; j++) {
+        for (let i = 0; i < m[j].length; i++) {
+          const ch = m[j][i];
+          if (ch === '.') continue;
+          const x = px + i;
+          const y = py + j;
+          if (x < 1 || x > w - 2 || y < y0 + 1 || y > y1 - 1) continue;
+          b.set(x, y, ch === 'l' ? light : ramp[0]);
+        }
+      }
+    }
+  }
+  // --- Wear ----------------------------------------------------------------
+  // One ramp step, and it does more for the object than any amount of pattern:
+  // the middle is where the household walks, so the dye has gone out of it, and
+  // the corners nobody treads on keep theirs. Dithered at both boundaries so
+  // neither has an edge to notice.
+  const ccx = (w - 1) / 2;
+  const ccy = (h - 1) / 2;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = 0; x < w; x++) {
+      const d = Math.hypot((x - ccx) / (w * 0.42), (y - ccy) / (h * 0.42));
+      if (d < 1) {
+        if (d > 0.55 && bayer(x, y) > (1 - d) / 0.45) continue;
+        b.set(x, y, shade(b.get(x, y), 0.32));
+      } else if (d > 1.15) {
+        if (bayer(x, y) > (d - 1.15) * 1.6) continue;
+        b.set(x, y, shade(b.get(x, y), -0.32));
+      }
+    }
+  }
+  // --- Centre figure -------------------------------------------------------
+  const med = parseArt(w >= 40 ? RUG_MEDALLION : RUG_MEDALLION_SMALL, {
+    d: ramp[0],
+    h: ramp[4],
+    l: ramp[3],
+  });
+  b.blit(med, mx0, my0);
+  // --- Bound edge ----------------------------------------------------------
+  // A rug has thickness, so the edge that faces the key light is a step up and
+  // the one facing away is a step down. One pixel each — any more and we are
+  // back to concentric rectangles.
+  b.hline(0, w - 1, y0, ramp[3]);
+  b.hline(0, w - 1, y1, ramp[0]);
+  b.vline(0, y0, y1, ramp[3]);
+  b.vline(w - 1, y0, y1, ramp[0]);
+  // --- Fringe --------------------------------------------------------------
+  // Loose thread, 1-2px, with gaps where it has been walked flat. A solid line
+  // of it would just be a sixth concentric rectangle.
+  for (const [edge, dir] of [
+    [y0, -1],
+    [y1, 1],
+  ] as [number, number][]) {
+    for (let x = 1; x < w - 1; x += 2) {
+      if (rng.chance(0.22)) continue;
+      const len = rng.int(1, 2);
+      const c = rng.chance(0.5) ? ramp[4] : dir < 0 ? ramp[3] : ramp[2];
+      const sx = x + rng.int(0, 1);
+      for (let k = 1; k <= len; k++) b.set(sx, edge + dir * k, c);
+    }
   }
   return b;
 }
@@ -1527,65 +1740,100 @@ export function ironStock(): PixelBuffer {
   return b;
 }
 
-/** A standing candlestick for a chancel. Foot, knop, drip pan — three widths. */
+/**
+ * A standing candlestick for a chancel.
+ *
+ * It used to be 33px from foot to flame — the same height as a person, because
+ * `FIGURE_H` is 30. Nothing else in the room was measured against the figure,
+ * so two of these standing either side of the lectern read as a pair of
+ * parishioners made of brass. At 13px it is furniture again: about knee height,
+ * which is what a floor candlestick is. Foot, knop, drip pan, candle — four
+ * widths, one pixel of change between each, because at this size the *profile*
+ * is the entire object.
+ */
 export function candleStandClip(): Clip {
   const frames: PixelBuffer[] = [];
   for (let f = 0; f < 3; f++) {
-    const b = new PixelBuffer(13, 35);
-    b.groundShadow(6, 33, 5, 1.8, 110);
-    b.ellipse(6, 32, 5, 2, R.gold[1]);
-    b.ellipse(6, 31, 4, 1.6, R.gold[2]);
-    b.fillRect(5, 15, 2, 16, R.gold[1]);
-    b.vline(5, 15, 30, R.gold[3]);
-    b.ellipse(6, 23, 3, 1.6, R.gold[2]);
-    b.set(4, 23, R.gold[4]);
-    b.ellipse(6, 15, 4, 1.6, R.gold[1]);
-    b.ellipse(6, 14, 4, 1.6, R.gold[3]);
-    b.fillRect(5, 6, 3, 8, R.paper[3]);
-    b.vline(5, 6, 13, R.paper[4]);
-    b.vline(7, 6, 13, R.paper[2]);
-    b.set(8, 11, R.paper[3]);
+    const b = new PixelBuffer(11, 15);
+    b.groundShadow(5, 13, 4, 1.4, 110);
+    // Foot: rim, then the top face one row up — the same trick the stool and
+    // the millstone use to say "this disc has thickness".
+    b.ellipse(5, 13, 4, 1.5, R.gold[1]);
+    b.ellipse(5, 12, 3, 1.2, R.gold[2]);
+    b.set(3, 12, R.gold[3]);
+    // Stem, lit down the left edge only.
+    b.fillRect(4, 8, 2, 4, R.gold[1]);
+    b.vline(4, 8, 11, R.gold[3]);
+    // Knop, and the drip pan above it.
+    b.hline(3, 7, 10, R.gold[2]);
+    b.set(3, 10, R.gold[4]);
+    b.ellipse(5, 8, 3, 1.2, R.gold[1]);
+    b.ellipse(5, 7, 3, 1.1, R.gold[3]);
+    // Candle stub: wax running down the shaded side only.
+    b.fillRect(4, 3, 3, 4, R.paper[3]);
+    b.vline(4, 3, 6, R.paper[4]);
+    b.vline(6, 3, 6, R.paper[2]);
+    b.set(7, 5, R.paper[2]);
     b.selOutline();
-    const fh = 3 + (f === 1 ? 1 : 0);
-    b.vline(6, 5 - fh, 5, R.fire[4]);
-    b.set(6 + (f === 2 ? 1 : 0), 4 - fh, R.fire[3]);
-    b.set(6, 5, R.gold[4]);
-    b.set(5, 4, R.fire[2]);
-    b.set(7, 4, R.fire[2]);
+    // Flame after the outline, or it comes back ringed in ink.
+    const fh = 2 + (f === 1 ? 1 : 0);
+    b.vline(5, 2 - fh, 2, R.fire[4]);
+    b.set(5 + (f === 2 ? 1 : 0), 1 - fh, R.fire[3]);
+    b.set(5, 2, R.gold[4]);
+    b.set(4, 1, R.fire[2]);
+    b.set(6, 1, R.fire[2]);
     frames.push(b);
   }
-  return clip(bakeSheet(frames, 6, 34), [0, 1, 2, 1], 6);
+  return clip(bakeSheet(frames, 5, 14), [0, 1, 2, 1], 6);
 }
 
-/** A church bench: seat, standards, and — the whole point — a back. */
+/**
+ * A church bench.
+ *
+ * The old one drew a dark board and a light board lying in the same plane, four
+ * pixels apart, and eight of those read as planking stacked on the flagstones.
+ * A bench is not two boards — it is three *planes* and a shadow, and the planes
+ * have to turn. You look down on the seat, so it takes the lit face; you look
+ * straight at the front edge of the seat board and at the back panel, so both
+ * of those drop a step; and the flags underneath take a contact shadow, without
+ * which the whole thing floats however well it is shaded (rule 11).
+ */
 export function pew(w: number): PixelBuffer {
-  const b = new PixelBuffer(w, 23);
-  b.groundShadow(w / 2, 21, w / 2 - 1, 2, 110);
-  // Back panel first (furthest from camera). It is *inset* at both ends and
-  // separated from the seat by a dark gap — without those two moves the back
-  // and the seat are two boards of the same width and the pew reads as a
-  // stack of planks rather than as something you sit in.
-  b.fillRect(5, 0, w - 10, 6, R.wood[1]);
-  b.hline(5, w - 6, 0, R.wood[3]);
-  b.hline(5, w - 6, 5, R.wood[0]);
-  b.vline(5, 0, 5, R.wood[2]);
-  b.vline(w - 6, 0, 5, R.wood[0]);
-  // Two uprights carrying it down to the seat.
-  for (const ux of [6, w - 8]) b.fillRect(ux, 5, 2, 4, R.wood[0]);
-  b.hline(0, w - 1, 6, R.night[1]);
-  // Seat: top face, then its front edge.
-  b.fillRect(0, 7, w, 5, R.wood[3]);
-  b.hline(0, w - 1, 7, R.wood[4]);
-  b.fillRect(0, 12, w, 3, R.wood[1]);
-  b.hline(0, w - 1, 14, R.wood[0]);
-  // End standards, held clear of each other so daylight shows between them.
-  for (const ex of [1, w - 4]) {
-    b.fillRect(ex, 15, 3, 6, R.wood[1]);
-    b.vline(ex, 15, 20, R.wood[2]);
-    b.hline(ex, ex + 2, 20, R.wood[0]);
+  const b = new PixelBuffer(w, 26);
+  // The shadow the bench sits in. Tight to the feet: a wide soft pool would
+  // read as a stain on the flags.
+  b.groundShadow(w / 2, 23.5, w / 2 - 2, 1.7, 130);
+  // --- Back panel: a vertical face, so it is a step below the seat ---------
+  b.fillRect(3, 1, w - 6, 9, R.wood[1]);
+  b.hline(3, w - 4, 0, R.wood[3]); // the capping rail catches the lamps
+  b.hline(3, w - 4, 1, R.wood[2]);
+  b.hline(3, w - 4, 9, R.wood[0]);
+  for (let x = 9; x < w - 8; x += 9) b.vline(x, 2, 8, R.wood[0]); // board seams
+  b.vline(3, 0, 9, R.wood[2]);
+  b.vline(w - 4, 0, 9, R.wood[0]);
+  // Standards carrying the back down through the seat.
+  for (const ux of [4, w - 7]) b.fillRect(ux, 9, 3, 3, R.wood[0]);
+  // The gap between back and seat — the pew's only negative space, and the
+  // reason the eye reads two surfaces meeting rather than one board over
+  // another.
+  b.hline(0, w - 1, 10, R.night[1]);
+  b.hline(0, w - 1, 11, R.night[0]);
+  // --- Seat: the horizontal face, so it is the lit one --------------------
+  b.fillRect(0, 12, w, 6, R.wood[3]);
+  b.hline(0, w - 1, 12, R.wood[4]); // far arris
+  b.hline(0, w - 1, 17, R.wood[2]);
+  // The turn to vertical. This 3px band *is* the thickness of the seat board.
+  b.fillRect(0, 18, w, 3, R.wood[1]);
+  b.hline(0, w - 1, 20, R.wood[0]);
+  // --- Legs, held apart so the floor shows between them -------------------
+  for (const ex of [1, w - 5]) {
+    b.fillRect(ex, 21, 4, 3, R.wood[1]);
+    b.vline(ex, 21, 23, R.wood[2]);
+    b.hline(ex, ex + 3, 23, R.wood[0]);
   }
-  b.hline(4, w - 5, 18, R.wood[1]);
-  b.hline(4, w - 5, 17, R.wood[2]);
+  // Stretcher between them, a step back in value so it sits behind the legs.
+  b.hline(6, w - 7, 21, R.wood[1]);
+  b.hline(6, w - 7, 22, R.wood[0]);
   b.selOutline();
   return b;
 }
@@ -1800,10 +2048,10 @@ export function bakeInteriors(): InteriorAssets {
     plant: still(potPlant(), 8, 21),
     sacks: still(sacks(3), 12, 17),
     rugs: [
-      still(roomRug(60, 40, R.red), 30, 20),
-      still(roomRug(48, 34, R.purple), 24, 17),
-      still(roomRug(56, 36, R.gold), 28, 18),
-      still(roomRug(30, 20, R.teal), 15, 10),
+      still(roomRug(60, 40, R.red, 3), 30, 20),
+      still(roomRug(48, 34, R.purple, 11), 24, 17),
+      still(roomRug(56, 36, R.gold, 19), 28, 18),
+      still(roomRug(30, 20, R.teal, 27), 15, 10),
     ],
     mat: still(doorMat(), 14, 11),
     innerDoor: still(innerDoor(), 12, 29),
@@ -1839,7 +2087,7 @@ export function bakeInteriors(): InteriorAssets {
     coalPile: still(coalPile(7), 12, 14),
     ironStock: still(ironStock(), 13, 12),
     candleStand: candleStandClip(),
-    pew: still(pew(42), 21, 22),
+    pew: still(pew(42), 21, 24),
     lectern: still(lectern(), 12, 29),
     openCrate: still(openCrate(11), 14, 23),
     sackStack: still(sackStack(13), 14, 27),

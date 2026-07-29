@@ -964,35 +964,160 @@ export function lamppost(): Clip {
   return clip(bakeSheet(frames, 7, 38), [0, 1, 2, 1], 6);
 }
 
-/** Rows of crops for the fields. `growth` 0..1. */
-export function cropRow(kind: 'wheat' | 'cabbage', seed: number): PixelBuffer {
+/**
+ * How a clump of field crop came up.
+ *
+ * A field sown by hand is not one stamp repeated: some clumps came up short,
+ * and along the margins the wind gets in and lays a few of them flat. Having
+ * three forms to deal out is what stops a field reading as wallpaper — the
+ * scene picks between them per plant, so no two rows are alike.
+ */
+export type CropForm = 'tall' | 'short' | 'lodged';
+
+/** A clump of crops for the fields. */
+export function cropRow(kind: 'wheat' | 'cabbage', seed: number, form: CropForm = 'tall'): PixelBuffer {
   const rng = new RNG(seed);
   const b = new PixelBuffer(16, 18);
   if (kind === 'wheat') {
-    for (let i = 0; i < 5; i++) {
-      const x = 2 + i * 3 + rng.int(0, 1);
-      const h = rng.int(9, 13);
+    const stalks = form === 'tall' ? 5 : 4;
+    const gap = stalks >= 5 ? 3 : 4;
+    for (let i = 0; i < stalks; i++) {
+      const x = 2 + i * gap + rng.int(0, 1);
+      const h = form === 'tall' ? rng.int(9, 13) : form === 'short' ? rng.int(5, 8) : rng.int(4, 7);
       const bend = rng.int(-1, 1);
+      // A lodged stalk lies over in a *curve*: displacement grows with the
+      // square of the height, so the foot stays put and the ear ends up on the
+      // ground. A straight diagonal just reads as a leaning pole.
+      const flop = form === 'lodged' ? (rng.chance(0.5) ? -1 : 1) : 0;
+      let tipX = x;
       for (let j = 0; j < h; j++) {
-        b.set(x + (j > h - 4 ? bend : 0), 15 - j, j < 3 ? R.leaf[1] : R.sand[2]);
+        const t = h > 1 ? j / (h - 1) : 1;
+        tipX = flop ? x + Math.round(flop * t * t * 3) : x + (j > h - 4 ? bend : 0);
+        b.set(tipX, 15 - j, j < 3 ? R.leaf[1] : R.sand[2]);
       }
-      // Ear of grain
+      // Ear of grain — upright on a standing stalk, lying flat on a fallen one.
       const ty = 15 - h;
-      b.fillRect(x + bend - 1, ty - 3, 3, 4, R.gold[3]);
-      b.set(x + bend - 1, ty - 3, R.gold[4]);
-      b.set(x + bend + 1, ty - 1, R.gold[1]);
+      if (flop) {
+        const ex = flop < 0 ? tipX - 3 : tipX;
+        b.fillRect(ex, ty - 1, 4, 3, R.gold[3]);
+        b.hline(ex, ex + 3, ty - 1, R.gold[4]);
+        b.set(flop < 0 ? ex : ex + 3, ty + 1, R.gold[1]);
+      } else {
+        b.fillRect(tipX - 1, ty - 3, 3, 4, R.gold[3]);
+        b.set(tipX - 1, ty - 3, R.gold[4]);
+        b.set(tipX + 1, ty - 1, R.gold[1]);
+      }
     }
   } else {
-    for (let i = 0; i < 3; i++) {
-      const x = 3 + i * 5;
+    const heads = form === 'lodged' ? 2 : 3;
+    for (let i = 0; i < heads; i++) {
+      const x = 3 + i * 5 + rng.int(0, 1);
       const y = 13 - rng.int(0, 1);
-      b.ellipse(x, y, 2.6, 2, R.leaf[1]);
-      b.ellipse(x, y - 0.5, 2, 1.4, R.leaf[2]);
+      const r = form === 'short' ? 1.9 : 2.6;
+      b.ellipse(x, y, r, r * 0.78, R.leaf[1]);
+      b.ellipse(x, y - 0.5, r - 0.6, r * 0.54, R.leaf[2]);
       b.set(x - 1, y - 1, R.leaf[3]);
+      // Outer leaves flat on the soil, so a head reads as a plant with a skirt
+      // rather than a bead dropped on the field.
+      if (form !== 'short') {
+        b.hline(x - 3, x - 2, y + 1, R.leaf[1]);
+        b.hline(x + 2, x + 3, y + 1, R.leaf[0]);
+      }
     }
   }
   b.selOutline();
   return b;
+}
+
+// ---------------------------------------------------------------------------
+// Post-and-rail fencing
+// ---------------------------------------------------------------------------
+
+export type FenceKind = 'run' | 'lean' | 'broken' | 'corner';
+
+/** Bay width. A run steps by 16, so consecutive bays overlap by 2px. */
+const FENCE_W = 18;
+/** The row the posts stand on, inside the bay's own buffer. */
+const FENCE_BASE = 21;
+
+/**
+ * One bay of post-and-rail fence.
+ *
+ * The old fence read as a ladder someone had dropped on the grass, and for
+ * good reason: every post was the same height, at the same spacing, with two
+ * dead-straight rails between them. Nothing built out of split timber is like
+ * that. Four things break it here, and — rule 11 — every one of them is a
+ * *face* or a silhouette, not a gradient:
+ *
+ *  - the post sits anywhere across its bay and stands 0-4px taller or shorter
+ *    than its neighbours, so the skyline of a run is ragged;
+ *  - the rails **sag** 1px in the middle of each bay and come back level at the
+ *    ends, so bays still meet but the run undulates;
+ *  - `lean` tilts a post out of true, `broken` snaps one off between the rails
+ *    with a splintered top rather than a sawn one;
+ *  - `corner` is wider and taller, because a corner post carries two runs and
+ *    is always the heaviest timber in the fence.
+ */
+export function fenceSegment(seed: number, kind: FenceKind = 'run'): PixelBuffer {
+  const rng = new RNG(seed);
+  const b = new PixelBuffer(FENCE_W, 26);
+  const base = FENCE_BASE;
+  const railTop = base - 14;
+  const railMid = base - 8;
+  const corner = kind === 'corner';
+
+  const pw = corner ? 5 : 3;
+  const px = corner ? 7 : 2 + rng.int(0, 5);
+  const top = kind === 'broken' ? railTop + 4 : railTop - (corner ? 5 : rng.int(0, 4));
+  const tilt = kind === 'lean' ? (rng.chance(0.5) ? 1 : -1) : 0;
+  const off = (y: number): number => Math.round(((base - y) / 8) * tilt);
+
+  b.groundShadow(px + Math.floor(pw / 2), base + 1, corner ? 5 : 4, 1.6, 100);
+
+  // Rails, drawn first so the post is visibly nailed *over* them.
+  for (const ry of [railTop, railMid]) {
+    for (let x = 0; x < FENCE_W; x++) {
+      const y = ry + (x > 4 && x < 13 ? 1 : 0);
+      b.set(x, y, R.wood[3]); // lit top face of the rail
+      b.set(x, y + 1, R.wood[1]); // the face turned away from the key light
+      if (hash2(x * 3, ry + seed) > 0.86) b.set(x, y, R.wood[4]);
+    }
+  }
+
+  for (let y = top; y <= base; y++) {
+    const x0 = px + off(y);
+    for (let i = 0; i < pw; i++) {
+      b.set(x0 + i, y, i === 0 ? R.wood[2] : i === pw - 1 ? R.wood[0] : R.wood[1]);
+    }
+  }
+  const tx = px + off(top);
+  // The sawn end: a stake reads as a stake because you can see its end grain.
+  b.hline(tx, tx + pw - 1, top, R.wood[3]);
+  if (corner) b.hline(tx + 1, tx + pw - 2, top + 1, R.wood[2]);
+  if (kind === 'broken') {
+    // Snapped, not sawn — the fibres do not part level.
+    b.set(tx, top, TRANSPARENT);
+    b.set(tx + pw - 1, top - 1, R.wood[2]);
+    b.set(tx + 1, top - 2, R.wood[3]);
+  }
+  // A tuft at the foot. Nobody ever gets a scythe right up against a post.
+  if (rng.chance(0.7)) {
+    const gx = px + rng.int(-2, 4);
+    b.line(gx, base, gx - 2, base - 4, R.leaf[1]);
+    b.line(gx + 1, base, gx + 1, base - 5, R.leaf[2]);
+    b.line(gx + 2, base, gx + 4, base - 3, R.leaf[1]);
+  }
+  b.selOutline();
+  return b;
+}
+
+export interface FenceAssets {
+  /** Ordinary bays. Index freely — no two of them are the same. */
+  bays: Sheet[];
+  /** A bay whose post has snapped. One or two per run, no more. */
+  broken: Sheet;
+  /** The heavy post that goes where two runs meet. */
+  corner: Sheet;
 }
 
 export interface BuildingAssets {
@@ -1011,8 +1136,12 @@ export interface BuildingAssets {
   stalls: Sheet[];
   cart: Sheet;
   lamppost: Clip;
+  fence: FenceAssets;
   wheat: Sheet[];
   cabbage: Sheet[];
+  /** Flattened plants, for the wind-blown margins of a field. */
+  wheatLodged: Sheet[];
+  cabbageLodged: Sheet[];
 }
 
 function still(b: PixelBuffer, ax: number, ay: number): Sheet {
@@ -1165,8 +1294,33 @@ export function bakeBuildings(): BuildingAssets {
     ],
     cart: still(cart(5), 19, 24),
     lamppost: lamppost(),
-    wheat: [still(cropRow('wheat', 1), 8, 16), still(cropRow('wheat', 2), 8, 16), still(cropRow('wheat', 3), 8, 16)],
-    cabbage: [still(cropRow('cabbage', 4), 8, 16), still(cropRow('cabbage', 5), 8, 16)],
+    fence: {
+      bays: [
+        still(fenceSegment(101), 9, 22),
+        still(fenceSegment(102), 9, 22),
+        still(fenceSegment(103), 9, 22),
+        still(fenceSegment(104), 9, 22),
+        still(fenceSegment(105), 9, 22),
+        still(fenceSegment(106, 'lean'), 9, 22),
+        still(fenceSegment(107, 'lean'), 9, 22),
+      ],
+      broken: still(fenceSegment(111, 'broken'), 9, 22),
+      corner: still(fenceSegment(121, 'corner'), 9, 22),
+    },
+    wheat: [
+      still(cropRow('wheat', 1), 8, 16),
+      still(cropRow('wheat', 2), 8, 16),
+      still(cropRow('wheat', 3), 8, 16),
+      still(cropRow('wheat', 12, 'short'), 8, 16),
+      still(cropRow('wheat', 13, 'short'), 8, 16),
+    ],
+    cabbage: [
+      still(cropRow('cabbage', 4), 8, 16),
+      still(cropRow('cabbage', 5), 8, 16),
+      still(cropRow('cabbage', 14, 'short'), 8, 16),
+    ],
+    wheatLodged: [still(cropRow('wheat', 21, 'lodged'), 8, 16), still(cropRow('wheat', 22, 'lodged'), 8, 16)],
+    cabbageLodged: [still(cropRow('cabbage', 24, 'lodged'), 8, 16), still(cropRow('cabbage', 25, 'lodged'), 8, 16)],
   };
 }
 

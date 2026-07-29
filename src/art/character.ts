@@ -60,6 +60,13 @@ export interface Skin {
   ink: RGBA;
   /** Draws a hood instead of hair, and hides the face. */
   hooded?: boolean;
+  /**
+   * Opens the cowl: the brim casts a row of shadow over the brow and the face
+   * is painted below it, one step down its own ramp. A plain `hooded` head is a
+   * cavity with two glowing eyes — the right read for the rogue, and the wrong
+   * one for a villager, who then has no face at all.
+   */
+  hoodFace?: boolean;
   scarf?: boolean;
   cape?: boolean;
   /** A flared coat below the belt that swings with the stride. */
@@ -148,17 +155,57 @@ function villager(
  * Ten villagers. Each one's boots are chosen against its trousers, not by
  * habit: dark cloth gets tan leather, warm or light cloth gets dark leather.
  * Anything else and the whole lower half of the sprite flattens out.
+ *
+ * The other standing rule here is value separation: coat, trousers and hair
+ * never sit on the same swatch of the same ramp. Two of the three on one step
+ * and the sprite stops having parts — at 30px tall the only thing telling a
+ * torso from a leg from a head is the value break between them.
  */
 export const NPC_SKINS: Skin[] = [
   villager(R.red, R.night, R.gold, R.hair), // innkeeper
   villager(R.leaf, R.sand, R.dirt, R.wood, BOOT_DARK), // farmer — canvas trousers
-  villager(R.purple, R.night, R.gold, R.night), // merchant
+  // Still black hair over black trousers, but staggered down the one ramp
+  // instead of stacked on night[2]: hair night[3], trousers two steps below at
+  // night[1]. On the same swatch the two ends of the sprite carried the same
+  // weight and the figure had no top or bottom to it.
+  villager(R.purple, R.night, R.gold, R.night, {
+    hair: R.night[3],
+    hairDark: R.night[1],
+    pants: R.night[1],
+    pantsDark: R.night[0],
+  }), // merchant
   villager(R.metal, R.night, R.red, R.hair, { cape: true }), // guard
   villager(R.sand, R.dirt, R.red, R.wood), // baker
   villager(R.teal, R.night, R.paper, R.hair), // fisher
   villager(R.paper, R.purple, R.teal, R.gold, BOOT_DARK), // townswoman
-  villager(R.dirt, R.night, R.leaf, R.hair, { scarf: true }), // labourer
-  villager(R.night, R.night, R.metal, R.night, { hooded: true }), // stranger
+  // Sun-bleached hair (sand[2]) rather than R.hair: hair[2] and the dirt[2]
+  // coat are the same brown at the same brightness, so the head read as a
+  // continuation of the jacket.
+  villager(R.dirt, R.night, R.leaf, R.sand, { scarf: true }), // labourer
+  /**
+   * The stranger — a drifter in off the coast. Dark is correct for him; a
+   * black cut-out is not, and that is what he was: coat, trousers and hair all
+   * on night[2] behind a hood with no face in it.
+   *
+   * Now the cloth is spread over four steps of the one ramp — hood and coat at
+   * night[3] lit to night[4], trousers two steps down at night[1] — with tan
+   * leather boots for the warm break at the ankle, a dirt[3] scarf and satchel
+   * strap as the only saturated run of pixels on the figure, and `hoodFace` to
+   * put skin under the brim. He still reads as the darkest person in town at
+   * a glance, which is the point, but he reads as a person.
+   */
+  villager(R.night, R.night, R.dirt, R.hair, {
+    coat: R.night[3],
+    coatLight: R.night[4],
+    coatDark: R.night[2],
+    pants: R.night[1],
+    pantsDark: R.night[0],
+    accent: R.dirt[3],
+    accentDark: R.dirt[2],
+    hooded: true,
+    hoodFace: true,
+    scarf: true,
+  }), // stranger
   villager(R.gold, R.wood, R.red, R.hair, { ...BOOT_DARK, scarf: true }), // herald
 ];
 
@@ -695,14 +742,70 @@ const HOOD_UP = [
   '...ccc...',
 ];
 
+/**
+ * The same cowl, worn open.
+ *
+ * Built off the bare heads above rather than off the closed hood: the eyes,
+ * nose and mouth keep the exact pixels they have without a hood, and all the
+ * hood does is replace the hair, add a row of brim shadow (`k`) across the brow
+ * and carry two columns of cloth down either side of the face. Redrawing the
+ * face smaller to "fit inside" the hood is what turns it back into a smudge —
+ * at nine pixels across there is no smaller face to draw.
+ */
+const HOOD_FACE_DOWN = [
+  '...CCC...',
+  '.CCCCCCC.',
+  'CCCCCCCCc',
+  'CCCCCCCCc',
+  'CCCCCCCCc',
+  'CCkkkkkCc',
+  'CCSSSSsCc',
+  'CCSeSesCc',
+  '.CSSmSsc.',
+  '.CSSSSsc.',
+  '...sSs...',
+];
+
+const HOOD_FACE_SIDE = [
+  '..CCCC...',
+  '.CCCCCCC.',
+  '.CCCCCCc.',
+  '.CCCCCCc.',
+  'CCCCkkSs.',
+  'CCCkweSSs',
+  'CCCkSSSSS',
+  'CCCksSSs.',
+  'CCCksSmS.',
+  '.CCksSSs.',
+  '..csSSs..',
+];
+
 function headArt(s: Skin, dir: Dir, blink: boolean): PixelBuffer {
   if (s.hooded) {
-    const rows = dir === 0 ? HOOD_DOWN : dir === 1 ? HOOD_SIDE : HOOD_UP;
+    const open = s.hoodFace === true;
+    const rows =
+      dir === 0
+        ? open
+          ? HOOD_FACE_DOWN
+          : HOOD_DOWN
+        : dir === 1
+          ? open
+            ? HOOD_FACE_SIDE
+            : HOOD_SIDE
+          : HOOD_UP;
     return parseArt(rows, {
       C: s.coat,
       c: s.coatDark,
       k: shade(s.coatDark, -0.6),
       g: P.magic,
+      // Skin under a brim is skin one step down its ramp, not a different
+      // colour: the face stays on-model with every bare head in the game and
+      // still sits well clear of the shadow the hood casts over it.
+      S: s.skinDark,
+      s: step(s.skinDark, -1),
+      e: s.ink,
+      w: P.white,
+      m: step(s.skinDark, -2),
     });
   }
   const rows =

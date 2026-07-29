@@ -298,25 +298,36 @@ export function bakeGround(): HTMLCanvasElement {
     const d = riverSDF(x, y);
     return d >= 0 && d < 12 + fbm(x * 0.04, y * 0.04, 2) * 12;
   };
+  /**
+   * How far *inside* the road's wobbly outer boundary a point sits, in px:
+   * positive on the roadbed, negative off it. The road mask, the darkened kerb
+   * and the texture scatter all read from this one number, so the edge they
+   * describe can never drift apart from each other.
+   */
+  const roadDepth = (x: number, y: number): number =>
+    1 + fbm(x * 0.055, y * 0.055, 2) * 7 - distToRoad(x, y);
+
   // The broad fbm term already wobbles the verge at a slow, large-scale rate;
   // on top of that a 2px bayer-dithered fringe breaks the edge up pixel by
   // pixel, and a sparse coarse-block hash lets the odd grass clump bite a
   // couple of px into the road itself so the line never reads as ruled.
   const isRoad = (x: number, y: number): boolean => {
     if (inPlaza(x, y)) return false;
-    const threshold = 1 + fbm(x * 0.055, y * 0.055, 2) * 7;
-    const d = distToRoad(x, y);
-    if (d >= threshold + 1) return false;
-    if (d < threshold - 1) {
-      if (d > threshold - 4) {
+    const dep = roadDepth(x, y);
+    if (dep <= -1) return false;
+    if (dep > 1) {
+      if (dep < 4) {
         const bx = Math.floor(x / 2);
         const by = Math.floor(y / 2);
         if (hash2(bx * 13 + 5, by * 17 + 9) < 0.05) return false;
       }
       return true;
     }
-    return bayer(x, y) < (threshold + 1 - d) / 2;
+    return bayer(x, y) < (dep + 1) / 2;
   };
+
+  /** Width of the darkened kerb, measured in from the road's outer boundary. */
+  const KERB = 2.5;
 
   /** Nearest road's centreline distance + width + direction (unlike
    *  `distToRoad`, not offset by half the road width) — used to lay wheel
@@ -368,6 +379,12 @@ export function bakeGround(): HTMLCanvasElement {
         }
       } else if (isRoad(x, y)) {
         c = rampBand(R.dirt, 0.35 + fbm(x * 0.05, y * 0.05, 2) * 0.35, x, y);
+        // The street used to just dither away into the turf over ~8px, which
+        // read as a mud slick with no edges at all. Now the outermost 1-2px of
+        // the roadbed drop a full ramp step: a kerb line that follows the same
+        // wobbly boundary the mask uses, with the pre-existing bayer fringe
+        // sitting outside it as the narrow transition to grass.
+        if (roadDepth(x, y) < KERB) c = shade(c, -0.32);
       } else if (field) {
         // Ploughed earth: alternating furrow ridges, with the sunlit side of
         // each ridge one step up the ramp. The regular rhythm is the whole
@@ -402,8 +419,18 @@ export function bakeGround(): HTMLCanvasElement {
     !isSand(x, y) &&
     !isRoad(x, y) &&
     !fieldAt(x, y);
+  // Roadbed only, and never the kerb: a light sand fleck stamped on that 2px
+  // band would punch holes straight through the edge the kerb exists to draw.
   const onDirt = (x: number, y: number): boolean =>
-    x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H && riverSDF(x, y) >= 0 && !inPlaza(x, y) && !isSand(x, y) && isRoad(x, y);
+    x >= 0 &&
+    y >= 0 &&
+    x < WORLD_W &&
+    y < WORLD_H &&
+    riverSDF(x, y) >= 0 &&
+    !inPlaza(x, y) &&
+    !isSand(x, y) &&
+    isRoad(x, y) &&
+    roadDepth(x, y) >= KERB;
   const onSand = (x: number, y: number): boolean =>
     x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H && riverSDF(x, y) >= 3 && isSand(x, y);
 
@@ -422,7 +449,7 @@ export function bakeGround(): HTMLCanvasElement {
 
   // --- pass 3: a few large-scale features ----------------------------------
   // Cracks in the plaza, and worn dirt patches where the grass thins out.
-  for (let i = 0; i < 160; i++) {
+  for (let i = 0; i < 200; i++) {
     const x = rng.int(0, WORLD_W - 1);
     const y = rng.int(0, WORLD_H - 1);
     if (isWater(x, y)) continue;
@@ -435,17 +462,45 @@ export function bakeGround(): HTMLCanvasElement {
         py += rng.int(0, 1);
       }
     } else if (onGrass(x, y)) {
-      // A bare earth patch: dithered edge, so it doesn't look stamped on.
-      const rx = rng.range(5, 13);
-      const ry = rx * rng.range(0.5, 0.8);
-      for (let py = Math.floor(y - ry); py <= y + ry; py++)
-        for (let px = Math.floor(x - rx); px <= x + rx; px++) {
-          const dx = (px - x) / rx;
-          const dy = (py - y) / ry;
-          const dd = dx * dx + dy * dy;
-          if (dd > 1 || !onGrass(px, py)) continue;
-          if (dd > 0.55 && bayer(px, py) < (dd - 0.55) / 0.45) continue;
-          buf.set(px, py, rampBand(R.dirt, 0.3 + fbm(px * 0.08, py * 0.08, 2) * 0.3, px, py));
+      // A patch of bare earth showing through the turf.
+      //
+      // The first version was a big ellipse whose outer 45% dissolved into a
+      // bayer fog. At that size, with no edge anywhere, it read as a stain on
+      // the grass rather than as soil under it. Three changes: the footprint
+      // is roughly a third of the area, the outline is irregular but *closed*
+      // (a radius wobbled by two low harmonics of the angle — single-valued,
+      // so it can never break into islands of noise), and the falloff is one
+      // solid pixel of shadowed lip plus one dithered pixel outside it,
+      // instead of a wide gradient of scattered dots.
+      const rx = rng.range(3, 7);
+      const ry = rx * rng.range(0.55, 0.85);
+      const p1 = rng.range(0, Math.PI * 2);
+      const p2 = rng.range(0, Math.PI * 2);
+      const a1 = rng.range(0.12, 0.26);
+      const a2 = rng.range(0.06, 0.16);
+      for (let py = Math.floor(y - ry) - 2; py <= y + ry + 2; py++)
+        for (let px = Math.floor(x - rx) - 2; px <= x + rx + 2; px++) {
+          if (!onGrass(px, py)) continue;
+          const nx = (px - x) / rx;
+          const ny = (py - y) / ry;
+          const rr = Math.hypot(nx, ny);
+          if (rr > 2) continue;
+          const th = Math.atan2(ny, nx);
+          const edge = 1 + Math.sin(th * 3 + p1) * a1 + Math.sin(th * 5 + p2) * a2;
+          // One screen pixel, expressed in the units the contour lives in, so
+          // the lip stays 1px wide on both the long and the short axis.
+          const g = rr < 1e-3 ? 1 : Math.hypot(nx / (rx * rr), ny / (ry * rr));
+          if (rr > edge + g) continue;
+          // Same tonal range the roadbed uses: trodden earth is *lighter* than
+          // the turf around it. The old patches sat below the grass in value,
+          // which is half of why they read as a spill rather than as ground.
+          const body = rampBand(R.dirt, 0.38 + fbm(px * 0.08, py * 0.08, 2) * 0.3, px, py);
+          if (rr < edge - g) buf.set(px, py, body);
+          // The lip and the transition ring are the body colour taken one step
+          // down its own ramp — the patch closes with a shadowed rim rather
+          // than a black outline, and the ring is the only dithered pixel.
+          else if (rr < edge) buf.set(px, py, shade(body, -0.32));
+          else if (bayer(px, py) < 0.5) buf.set(px, py, shade(body, -0.32));
         }
     }
   }

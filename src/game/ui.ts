@@ -1,7 +1,7 @@
 /** HUD, hotbar, dialogue box, help panel and the full-screen asset gallery. */
 import type { Assets, GalleryGroup } from '../art/assets';
 import { drawClip, drawFrame, type Clip } from '../art/sheet';
-import { drawText, GLYPH_H, textWidth } from '../engine/font';
+import { ADVANCE, drawText, GLYPH_H, textWidth } from '../engine/font';
 import { GAME_H, GAME_W } from '../engine/screen';
 import { HOTBAR_SIZE, ITEMS, iconFor, type Inventory } from './inventory';
 
@@ -57,12 +57,42 @@ const HELP: string[] = [
   'H              HIDE THIS',
 ];
 
+/**
+ * Top-left column geometry. The clock capsule and the quest banner are stacked,
+ * both left-aligned on the same edge and each sized to its own text, so a short
+ * notice stays a short bar. Every number here is a whole pixel: the frame is
+ * 448x252 before scaling, and half a pixel is a smear.
+ */
+const COL_X = 2;
+const COL_Y = 2;
+/** Text inset inside a capsule, on every side. */
+const CAP_PAD = 3;
+/** 1px border + 1px air + glyph + 1px drop shadow + 1px air + 1px border. */
+const CAP_H = GLYPH_H + 4;
+/** Air between the clock capsule and the banner under it. */
+const CAP_GAP = 2;
+
+/** Widest a top-left capsule may get: it has to stay clear of the middle. */
+const CAP_MAX_W = Math.floor(GAME_W / 2) - 16 - COL_X;
+
+/** Longest string that fits `CAP_MAX_W` once the capsule padding is paid for. */
+function capsuleFit(s: string): string {
+  const n = Math.max(1, Math.floor((CAP_MAX_W - CAP_PAD * 2 + 1) / ADVANCE));
+  return s.length <= n ? s : s.slice(0, n);
+}
+
+/** Draw one top-left capsule at `y`, sized to its text. Returns the next free y. */
+function capsule(ctx: CanvasRenderingContext2D, text: string, y: number, color: string): number {
+  panel(ctx, COL_X, y, textWidth(text) + CAP_PAD * 2, CAP_H, 0.6);
+  drawText(ctx, text, COL_X + CAP_PAD, y + 2, color);
+  return y + CAP_H + CAP_GAP;
+}
+
 export function drawHud(ctx: CanvasRenderingContext2D, s: HudState): void {
-  // Clock, top-left. This is player-facing time, not a debug readout, so it
-  // always shows.
+  // Clock, top of the left column. This is player-facing time, not a debug
+  // readout, so it always shows.
   const clk = `${clock(s.dayT)}${s.paused ? ' *' : ''}`;
-  panel(ctx, 2, 2, textWidth(clk) + 6, 9, 0.6);
-  drawText(ctx, clk, 5, 4, '#cfe0f5');
+  const questY = capsule(ctx, clk, COL_Y, '#cfe0f5');
 
   // Place name, top-right.
   drawText(ctx, s.place, GAME_W - textWidth(s.place) - 4, 4, '#f0c261');
@@ -73,11 +103,8 @@ export function drawHud(ctx: CanvasRenderingContext2D, s: HudState): void {
   const gold = `${s.gold}G`;
   drawText(ctx, gold, GAME_W - textWidth(gold) - 4, 22, '#f0c261');
 
-  if (s.quest) {
-    const q = s.quest.slice(0, 46);
-    panel(ctx, 2, 13, textWidth(q) + 6, 9, 0.6);
-    drawText(ctx, q, 5, 15, '#8fd0a0');
-  }
+  // The job on the notice board, directly under the clock.
+  if (s.quest) capsule(ctx, capsuleFit(s.quest), questY, '#8fd0a0');
 
   // Energy bar, bottom-right, with a small "STA" tag and a panel that clears
   // the screen edge by a few pixels either way.
