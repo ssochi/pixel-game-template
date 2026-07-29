@@ -146,14 +146,25 @@ export class Scene {
    * One bay of fence.
    *
    * All the irregularity lives in the sprite variants (see `fenceSegment` in
-   * `buildings.ts`), so a run is just this called in a loop — but because the
-   * bay is picked at random the run never repeats one picket, which is what
-   * made the old fences read as ladders lying in the grass. Corners take the
-   * heavy post.
+   * `buildings.ts`), so a run is just this in a loop — but because the bay is
+   * drawn at random the run never repeats one picket.
+   *
+   * `mode` matters as much as the jitter does. An east or west side of an
+   * enclosure runs *away* from the camera, and building it out of the same
+   * front-facing bay lays a horizontal rail across the screen every 16px: that
+   * is the ladder. Those runs take `'side'`, whose rails are foreshortened to a
+   * plank running back up the line.
    */
-  private fenceBay(rng: RNG, x: number, y: number, corner = false): void {
+  private fenceBay(rng: RNG, x: number, y: number, mode: 'run' | 'side' | 'corner' = 'run'): void {
     const f = this.a.buildings.fence;
-    const sheet = corner ? f.corner : rng.chance(0.07) ? f.broken : f.bays[rng.int(0, f.bays.length - 1)];
+    const sheet =
+      mode === 'corner'
+        ? f.corner
+        : mode === 'side'
+          ? f.sides[rng.int(0, f.sides.length - 1)]
+          : rng.chance(0.07)
+            ? f.broken
+            : f.bays[rng.int(0, f.bays.length - 1)];
     this.add(sheet, x, y, { solid: 6, label: 'fence' });
   }
 
@@ -534,8 +545,8 @@ export class Scene {
       this.fenceBay(fences, x, PADDOCK.y1);
     }
     for (let y = PADDOCK.y0 + step; y < PADDOCK.y1; y += step) {
-      this.fenceBay(fences, PADDOCK.x0, y);
-      this.fenceBay(fences, PADDOCK.x1, y);
+      this.fenceBay(fences, PADDOCK.x0, y, 'side');
+      this.fenceBay(fences, PADDOCK.x1, y, 'side');
     }
     for (const [cx, cy] of [
       [PADDOCK.x0, PADDOCK.y0],
@@ -543,7 +554,7 @@ export class Scene {
       [PADDOCK.x0, PADDOCK.y1],
       [PADDOCK.x1, PADDOCK.y1],
     ] as [number, number][]) {
-      this.fenceBay(fences, cx, cy, true);
+      this.fenceBay(fences, cx, cy, 'corner');
     }
 
     // Livestock in the paddock, poultry loose around the farmyard.
@@ -610,8 +621,8 @@ export class Scene {
     for (let y = Y0 + step; y < Y1; y += step) {
       // The gateway, on the west side facing the town.
       if (Math.abs(y - (FARM.y0 + 56)) < 10) continue;
-      this.fenceBay(fences, X0, y);
-      this.fenceBay(fences, X1, y);
+      this.fenceBay(fences, X0, y, 'side');
+      this.fenceBay(fences, X1, y, 'side');
     }
     // Corners last, so the heavy post covers the ends of both runs meeting it.
     for (const [cx, cy] of [
@@ -620,7 +631,7 @@ export class Scene {
       [X0, Y1],
       [X1, Y1],
     ] as [number, number][]) {
-      this.fenceBay(fences, cx, cy, true);
+      this.fenceBay(fences, cx, cy, 'corner');
     }
 
     this.bin = this.add(p.chestClosed, FARM.x0 - 20, FARM.y0 + 40, { solid: 8, label: 'shipping bin' });
@@ -635,10 +646,13 @@ export class Scene {
     this.add(p.crates[0], FARM.x0 + 18, FARM.y1 - 6, { solid: 8, label: 'seed crate' });
     this.add(p.crates[1], FARM.x0 + 33, FARM.y1 - 1, { solid: 8, label: 'seed crate' });
     this.add(p.barrels[0], FARM.x1 - 10, FARM.y0 + 20, { solid: 8, label: 'water butt' });
-    // Tools left out by the gate. No collision — they are a read, not an
-    // obstacle, and the gateway is the one place the player must get through.
-    this.add(this.a.farm.tools.hoe, FARM.x0 + 8, FARM.y0 + 28, { sortY: FARM.y0 + 32, label: 'hoe' });
-    this.add(this.a.farm.tools.can, FARM.x0 + 9, FARM.y0 + 74, { sortY: FARM.y0 + 78, label: 'watering can' });
+    // Tools left propped against the west fence, either side of the gateway.
+    // They sit *on* the fence line rather than out on the grass: a 16px tool
+    // alone in the middle of a field reads as a dropped pickup, but the same
+    // sprite against a post reads as something somebody put down. No collision
+    // — the gateway is the one place the player has to be able to get through.
+    this.add(this.a.farm.tools.hoe, FARM.x0 - 6, FARM.y0 + 26, { sortY: FARM.y0 + 30, label: 'hoe' });
+    this.add(this.a.farm.tools.can, FARM.x0 - 5, FARM.y0 + 82, { sortY: FARM.y0 + 86, label: 'watering can' });
   }
 
   private buildRiver(): void {

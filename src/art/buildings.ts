@@ -1033,54 +1033,69 @@ export function cropRow(kind: 'wheat' | 'cabbage', seed: number, form: CropForm 
 // Post-and-rail fencing
 // ---------------------------------------------------------------------------
 
-export type FenceKind = 'run' | 'lean' | 'broken' | 'corner';
+export type FenceKind = 'run' | 'lean' | 'broken' | 'corner' | 'side';
 
 /** Bay width. A run steps by 16, so consecutive bays overlap by 2px. */
 const FENCE_W = 18;
-/** The row the posts stand on, inside the bay's own buffer. */
-const FENCE_BASE = 21;
+/** Buffer height, and the row the posts stand on inside it. */
+const FENCE_H = 38;
+const FENCE_BASE = 33;
 
 /**
  * One bay of post-and-rail fence.
  *
- * The old fence read as a ladder someone had dropped on the grass, and for
- * good reason: every post was the same height, at the same spacing, with two
- * dead-straight rails between them. Nothing built out of split timber is like
- * that. Four things break it here, and — rule 11 — every one of them is a
- * *face* or a silhouette, not a gradient:
+ * The old fence read as a ladder someone had dropped on the grass, for two
+ * separate reasons, and both of them are fixed here.
  *
- *  - the post sits anywhere across its bay and stands 0-4px taller or shorter
- *    than its neighbours, so the skyline of a run is ragged;
- *  - the rails **sag** 1px in the middle of each bay and come back level at the
- *    ends, so bays still meet but the run undulates;
- *  - `lean` tilts a post out of true, `broken` snaps one off between the rails
- *    with a splintered top rather than a sawn one;
- *  - `corner` is wider and taller, because a corner post carries two runs and
- *    is always the heaviest timber in the fence.
+ * **It was too regular.** Every post the same height, at the same spacing, with
+ * two dead-straight rails between them. Nothing built out of split timber is
+ * like that, so — rule 11, by faces and silhouette rather than by gradient —
+ * the post now sits anywhere across its bay and stands 0-4px taller or shorter
+ * than its neighbours, the rails **sag** 1px in the middle of each bay and come
+ * back level at the ends (so bays still meet, but the run undulates), `lean`
+ * tilts a post out of true, `broken` snaps one off between the rails with a
+ * splintered top rather than a sawn one, and `corner` is wider and taller
+ * because a corner post carries two runs.
+ *
+ * **And it faced the wrong way.** The east and west sides of every enclosure
+ * are runs going *away* from the camera, and they were built out of the same
+ * front-facing sprite — which stacks a horizontal rail every 16px straight down
+ * the screen. That is not a fence with a perspective problem, that is a ladder.
+ * `side` is the bay for those runs: the rails point at you, so what you see is
+ * the post and the 2px plank running back to the next post up the line.
  */
 export function fenceSegment(seed: number, kind: FenceKind = 'run'): PixelBuffer {
   const rng = new RNG(seed);
-  const b = new PixelBuffer(FENCE_W, 26);
+  const b = new PixelBuffer(FENCE_W, FENCE_H);
   const base = FENCE_BASE;
-  const railTop = base - 14;
-  const railMid = base - 8;
+  const railTop = base - 16;
+  const railMid = base - 9;
   const corner = kind === 'corner';
+  const side = kind === 'side';
 
   const pw = corner ? 5 : 3;
-  const px = corner ? 7 : 2 + rng.int(0, 5);
-  const top = kind === 'broken' ? railTop + 4 : railTop - (corner ? 5 : rng.int(0, 4));
+  const px = corner ? 7 : side ? 6 + rng.int(0, 2) : 2 + rng.int(0, 5);
+  const top = kind === 'broken' ? railTop + 5 : railTop - (corner ? 5 : rng.int(0, 4));
   const tilt = kind === 'lean' ? (rng.chance(0.5) ? 1 : -1) : 0;
   const off = (y: number): number => Math.round(((base - y) / 8) * tilt);
 
   b.groundShadow(px + Math.floor(pw / 2), base + 1, corner ? 5 : 4, 1.6, 100);
 
   // Rails, drawn first so the post is visibly nailed *over* them.
-  for (const ry of [railTop, railMid]) {
-    for (let x = 0; x < FENCE_W; x++) {
-      const y = ry + (x > 4 && x < 13 ? 1 : 0);
-      b.set(x, y, R.wood[3]); // lit top face of the rail
-      b.set(x, y + 1, R.wood[1]); // the face turned away from the key light
-      if (hash2(x * 3, ry + seed) > 0.86) b.set(x, y, R.wood[4]);
+  if (side) {
+    // Foreshortened to nothing: one plank running back up the line, exactly
+    // 16px long so it dies under the next post's foot.
+    b.fillRect(px + 1, railTop - 16, 2, railMid - railTop + 18, R.wood[1]);
+    b.vline(px + 1, railTop - 16, railMid + 1, R.wood[2]);
+    b.hline(px + 1, px + 2, railTop - 16, R.wood[0]);
+  } else {
+    for (const ry of [railTop, railMid]) {
+      for (let x = 0; x < FENCE_W; x++) {
+        const y = ry + (x > 4 && x < 13 ? 1 : 0);
+        b.set(x, y, R.wood[3]); // lit top face of the rail
+        b.set(x, y + 1, R.wood[1]); // the face turned away from the key light
+        if (hash2(x * 3, ry + seed) > 0.86) b.set(x, y, R.wood[4]);
+      }
     }
   }
 
@@ -1112,8 +1127,10 @@ export function fenceSegment(seed: number, kind: FenceKind = 'run'): PixelBuffer
 }
 
 export interface FenceAssets {
-  /** Ordinary bays. Index freely — no two of them are the same. */
+  /** Bays for a run across the screen. Index freely — no two are the same. */
   bays: Sheet[];
+  /** Bays for a run going away from the camera, where the rails foreshorten. */
+  sides: Sheet[];
   /** A bay whose post has snapped. One or two per run, no more. */
   broken: Sheet;
   /** The heavy post that goes where two runs meet. */
@@ -1296,16 +1313,22 @@ export function bakeBuildings(): BuildingAssets {
     lamppost: lamppost(),
     fence: {
       bays: [
-        still(fenceSegment(101), 9, 22),
-        still(fenceSegment(102), 9, 22),
-        still(fenceSegment(103), 9, 22),
-        still(fenceSegment(104), 9, 22),
-        still(fenceSegment(105), 9, 22),
-        still(fenceSegment(106, 'lean'), 9, 22),
-        still(fenceSegment(107, 'lean'), 9, 22),
+        still(fenceSegment(101), 9, 34),
+        still(fenceSegment(102), 9, 34),
+        still(fenceSegment(103), 9, 34),
+        still(fenceSegment(104), 9, 34),
+        still(fenceSegment(105), 9, 34),
+        still(fenceSegment(106, 'lean'), 9, 34),
+        still(fenceSegment(107, 'lean'), 9, 34),
       ],
-      broken: still(fenceSegment(111, 'broken'), 9, 22),
-      corner: still(fenceSegment(121, 'corner'), 9, 22),
+      sides: [
+        still(fenceSegment(131, 'side'), 9, 34),
+        still(fenceSegment(132, 'side'), 9, 34),
+        still(fenceSegment(133, 'side'), 9, 34),
+        still(fenceSegment(134, 'side'), 9, 34),
+      ],
+      broken: still(fenceSegment(111, 'broken'), 9, 34),
+      corner: still(fenceSegment(121, 'corner'), 9, 34),
     },
     wheat: [
       still(cropRow('wheat', 1), 8, 16),
