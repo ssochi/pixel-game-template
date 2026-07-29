@@ -50,12 +50,12 @@ function start(): void {
   player.y = 650;
   camera.follow(player.x, player.y, WORLD_W, WORLD_H, 1, true);
 
-  // Slimes only live in the woods across the river, away from the town.
-  const slimes = [
-    new Slime(assets, 1280, 200),
-    new Slime(assets, 1330, 760),
-    new Slime(assets, 1250, 880),
-  ];
+  // No slimes in the overworld — this is a farming valley, not a shooting
+  // range. The slime AI (`agents.ts`), the bullet collision loop below, the
+  // gun art and the player's shooting code are all still here and still wired
+  // up; M05's mine will refill this array with spawn points. Everything that
+  // walks the list simply no-ops while it is empty.
+  const slimes: Slime[] = [];
 
   // Background extras: unnamed, just there to fill the streets.
   const villagers = scene.villagerSpawns.map((sp, i) => {
@@ -397,7 +397,7 @@ function start(): void {
   let dayPaused = false;
   let showGrid = false;
   let showColliders = false;
-  let showHelp = true;
+  let showHelp = false; // opens closed: the first frame should be the valley, not a keymap
   let fps = 60;
   let fpsAcc = 0;
   let fpsFrames = 0;
