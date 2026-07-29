@@ -399,14 +399,63 @@ export function floorStain(b: PixelBuffer, cx: number, cy: number, rx: number, r
 
 /**
  * The nave's aisle: the flags down the centre line rubbed pale by four
- * centuries of feet, with a darker joint holding each edge. A church floor
- * without an aisle is a warehouse floor.
+ * centuries of feet. A church floor without an aisle is a warehouse floor.
+ *
+ * The first version painted the whole width a solid step lighter with a 2px
+ * dark lip either side, and that is three separate mistakes stacked on one
+ * another:
+ *
+ *  - A *lip* is a boundary, and wear has no boundary. Straight, parallel, and
+ *    running unbroken from the chancel to the door, it read as a rectangle of
+ *    highlight the renderer had left lying on the floor.
+ *  - The lift needs somewhere to go. `wearPath` already had the answer for this
+ *    indoors: rule 5's ordered dither, dense along the centre line and thinning
+ *    to nothing, so the track has no boundary left to notice. Here it is a flat
+ *    plateau down the middle with the dither confined to a few pixels of fringe
+ *    — a hard edge and a full-width screen door are both worse than the stripe.
+ *  - The lift went on regardless of what it landed on, joints included. Feet
+ *    never touch the bottom of a joint — the grooves are below the tread — so
+ *    the grid has to survive the aisle crossing it, or the wear stops reading
+ *    as wear on *flagstones* and becomes a wash laid over the top of them.
+ *
+ * The cap matters as much as the dither. Rule 7 keeps the floor below the props
+ * standing on it, and stone index 2 is the flags' base tone, so nothing in here
+ * may finish above `R.stone[3]` — one step over base, which is a tone the
+ * chequer already uses, and still under the pews' lit seat boards.
  */
 export function aisleBand(b: PixelBuffer, cx: number, y0: number, y1: number, half: number): void {
+  // Which step of the stone ramp a floor pixel is sitting on, or -1 for
+  // anything that isn't flagstone (the room edge, a prop's shadow).
+  const stoneStep = (c: RGBA): number => {
+    for (let i = 0; i < 5; i++) {
+      const s = R.stone[i];
+      if (s[0] === c[0] && s[1] === c[1] && s[2] === c[2]) return i;
+    }
+    return -1;
+  };
   for (let y = y0; y < y1; y++) {
-    for (let x = cx - half; x <= cx + half; x++) {
-      const edge = Math.abs(x - cx) > half - 2;
-      b.set(x, y, shade(b.get(x, y), edge ? -0.3 : 0.24));
+    // The track breathes. Two octaves of low-frequency noise, so it swells
+    // where people stand about and pinches where they file past — a constant
+    // half-width is the single clearest tell that a stripe was drawn rather
+    // than walked.
+    const wob = fbm(y * 0.045, 7.3, 2) + fbm(y * 0.155, 19.7, 2) * 0.35;
+    const hw = half * (0.62 + wob * 0.52);
+    for (let x = Math.floor(cx - hw); x <= Math.ceil(cx + hw); x++) {
+      const d = Math.abs(x - cx) / hw;
+      if (d > 1) continue;
+      const step = stoneStep(b.get(x, y));
+      // Joints and chipped corners are below the tread: they never rub.
+      if (step < 2) continue;
+      // Already at the cap — the chequer's light flags are as pale as the
+      // aisle is allowed to get, so they stay exactly where they are.
+      if (step >= 3) continue;
+      // Rule 5: a flat plateau where the tread is, and dithering *only* in the
+      // band where it dies away. Dithering the whole width instead — which the
+      // first attempt at this fix did — puts a screen-door texture down the
+      // middle of the nave, which at 4x is louder than the stripe it replaced.
+      const cover = 3.2 * (1 - d) * (0.78 + fbm(x * 0.08, y * 0.06, 2) * 0.42);
+      if (bayer(x, y) > cover) continue;
+      b.set(x, y, R.stone[step + 1]);
     }
   }
 }
@@ -416,37 +465,106 @@ export function aisleBand(b: PixelBuffer, cx: number, y0: number, y1: number, ha
  *
  * It can't be a translucent sprite — sheet baking snaps partial alpha away, so
  * a soft overlay would come back opaque. Painting it straight into the room
- * bitmap keeps it on the palette: the flags are lifted a step, then the panes'
- * own colours are dithered over the top in the same lattice as the glass.
+ * bitmap keeps it on the palette: every flag the pool touches is lifted one
+ * step, and the panes that carry colour are moved across onto a tint's ramp at
+ * the same value, so the light *brightens* the floor instead of covering it.
+ *
+ * The version this replaces failed on both counts that matter for a projection.
+ * It was painted where the caller aimed it, which put a closed ring of colour
+ * round the lectern with the lectern at dead centre; and it was cut on a fixed
+ * 6x4 lattice inside a hard-edged ellipse, which is the "regular top-down
+ * brickwork reads as a wall" trap from rule 7 wearing different colours — at 4x
+ * it was a square of patterned cloth someone had left on the chancel floor.
  */
 export function glassSpill(b: PixelBuffer, cx: number, cy: number, rx: number, ry: number): void {
-  const tints: Ramp[] = [R.gold, R.teal, R.red, R.purple];
-  for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++) {
-    for (let x = Math.floor(cx - rx); x <= Math.ceil(cx + rx); x++) {
-      const dx = (x - cx) / rx;
-      const dy = (y - cy) / ry;
-      const d = dx * dx + dy * dy;
-      if (d > 1) continue;
-      // The light itself: the flags simply lift a step.
-      b.set(x, y, shade(b.get(x, y), 0.25));
-      // The colour arrives as whole projected panes — *solid* blocks with hard
-      // edges, one tint each. Two earlier attempts chose the tint per pixel
-      // and then dithered it, and both threw coloured confetti across the
-      // chancel: at 4x a 50% dither of a saturated hue is not a wash, it is a
-      // field of dots. Only the panes on the rim of the pool are dithered, and
-      // only to soften the boundary.
-      const cxi = Math.floor((x - cx + 60) / 6);
-      const cyi = Math.floor((y - cy + 60) / 4);
-      const ccx = (cxi - 10) * 6 + 3;
-      const ccy = (cyi - 15) * 4 + 2;
-      const cd = (ccx / rx) ** 2 + (ccy / ry) ** 2;
-      if (cd > 1.05) continue;
-      // Half the panes are left as bare lit stone. Leaded glass is mostly
-      // clear quarries with coloured lights set into it, and a solid mosaic
-      // of saturated blocks reads as a patchwork quilt lying on the floor.
-      if ((cxi + cyi) % 2 === 0) continue;
-      const ramp = tints[(((cxi + cyi * 3) % tints.length) + tints.length) % tints.length];
-      if (cd < 0.5 || bayer(x, y) < 1.05 - cd) b.set(x, y, ramp[2]);
+  // The tints of the window's own lights, weighted. Gold and the two cool
+  // hues carry it; red appears once in seven, because a red block big enough
+  // to notice on a stone floor stops being light and starts being a spill.
+  const tints: Ramp[] = [R.gold, R.teal, R.purple, R.teal, R.gold, R.purple, R.red];
+  const stoneStep = (c: RGBA): number => {
+    for (let i = 0; i < 5; i++) {
+      const s = R.stone[i];
+      if (s[0] === c[0] && s[1] === c[1] && s[2] === c[2]) return i;
+    }
+    return -1;
+  };
+  // --- Where it lands -------------------------------------------------------
+  // The arguments name the *window*, not the pool: `cx, cy` is the spot on the
+  // flags directly under the glass and `rx, ry` its opening. Painting the pool
+  // there — which is what the previous version did — put a ring of colour round
+  // the lectern with the lectern at dead centre, and light does not do that.
+  // The window is high up the back wall, so its image is thrown forward, *down
+  // the nave towards the viewer*: it starts at the lectern's foot and runs on
+  // past it, stretched along +y and fanning out as it goes, the way any oblique
+  // projection of an upright opening does.
+  const hy = rx * 1.2;
+  const py = cy + ry * 2.8;
+  for (let y = Math.floor(py - hy); y <= Math.ceil(py + hy); y++) {
+    const t = (y - (py - hy)) / (2 * hy); // 0 at the far lip, 1 at the near one
+    // Roughly the width of the opening, fanning a little as it comes forward.
+    const hx = rx * (0.42 + 0.32 * t);
+    // The spine wanders. A tall narrow ellipse has near-vertical sides, so with
+    // a straight centre line the dithered rim lines up into two dotted verticals
+    // and the boundary is back — the thing the rim exists to get rid of.
+    const sx = cx + (fbm(y * 0.06, 3.7, 2) - 0.5) * rx * 0.3;
+    for (let x = Math.floor(sx - hx - 2); x <= Math.ceil(sx + hx + 2); x++) {
+      const dx = (x - sx) / hx;
+      const dy = (y - py) / hy;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      // Rule 5 again, and the reason there is no hard-edged oval any more: the
+      // light is *flat* where it is full, and only the band where it dies away
+      // is dithered. The noise runs the falloff, so the rim comes apart into
+      // flecks instead of stepping down a contour line.
+      const cover = (1.25 - d) * (0.72 + fbm(x * 0.17, y * 0.13, 2) * 0.85);
+      if (cover < 0.38) continue;
+      const core = cover > 0.55;
+      if (!core && bayer(x, y) > (cover - 0.38) / 0.17) continue;
+      const step = stoneStep(b.get(x, y));
+      if (step < 0) continue;
+      // Everything the pool touches is lifted one step first — that lift is
+      // what makes the shape read as *light* rather than as pigment, and it has
+      // to be continuous or the pool comes apart into unconnected patches.
+      const lit = clampStep(step + 1);
+      // Two things get the lift and never the colour, and between them they are
+      // most of why this reads as light on a floor rather than a cloth on one:
+      //
+      //  - The dithered rim. A saturated hue laid down through a 50% dither is
+      //    not a soft edge, it is confetti — the halo has to be plain lit stone
+      //    or the pool ends in a scatter of coloured dots two flags wide.
+      //  - The joints. Grout stays two steps below the flags, so the flagstone
+      //    grid survives crossing the pool.
+      if (!core || step < 2) {
+        b.set(x, y, R.stone[lit]);
+        continue;
+      }
+      // --- The panes --------------------------------------------------------
+      // A regular lattice of coloured blocks is the same error rule 7 calls out
+      // for regular top-down brickwork: it reads as fabric. So the lattice is
+      // domain-warped by noise before it is quantised into cells — the cells
+      // come out different sizes with wandering, non-parallel edges, and about
+      // one in three is left as bare lit stone, so the pale flags show between
+      // the colours the way clear quarries show between the lights in the glass.
+      const wx = x + (fbm(x * 0.1, y * 0.1 + 5.5, 2) - 0.5) * 10;
+      const wy = y + (fbm(x * 0.09 + 11.5, y * 0.12, 2) - 0.5) * 10;
+      const gx = Math.floor(wx / 8);
+      const gy = Math.floor(wy / 7);
+      if (hash2(gx * 3 + 1, gy * 7 + 4) < 0.32) {
+        b.set(x, y, R.stone[lit]);
+        continue;
+      }
+      // This is light, so it *lifts* the flag it lands on rather than covering
+      // it: the flag's own step moves one up and across onto the tint's ramp,
+      // which is why a coloured cell still sits at the same value as the lit
+      // stone beside it instead of reading as a painted tile.
+      //
+      // The cap at index 3 is not decoration. Every ramp desaturates hard at
+      // index 4 (SAT drops to 0.6) and lands on L≈0.76 — within a whisker of
+      // lit stone — so a tint taken all the way to 4 is a pale grey-lilac that
+      // vanishes into the floor. The first pass at this fix let it, and the
+      // pool came out as a handful of colourless specks. Index 3 is where
+      // these ramps still hold their hue.
+      const ramp = tints[Math.floor(hash2(gx + 13, gy - 5) * tints.length) % tints.length];
+      b.set(x, y, ramp[Math.min(3, lit)]);
     }
   }
 }
