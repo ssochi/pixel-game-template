@@ -441,6 +441,12 @@ function start(): void {
     if (pendingRoom) {
       room = pendingRoom;
       pendingRoom = null;
+      // Entering wins over leaving, and it has to *cancel* the leave rather
+      // than just outrank it. A leave() followed by an enter() before the wipe
+      // bottoms out used to land you in the room with pendingExit still set,
+      // so the next wipe — the one the doorway trigger fires the moment you
+      // spawn near it — threw you straight back outside.
+      pendingExit = false;
       player.x = room.spawnX;
       player.y = room.spawnY;
       player.indoors = true;

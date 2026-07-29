@@ -48,14 +48,34 @@ await page.waitForTimeout(600);
 // 每张验收截图的左三分之一都会被键位表盖住。
 
 for (const s of SHOTS) {
+  // `leave` has to finish its wipe before `enter` starts one, and it needs its
+  // own evaluate to do that — batching them in a single tick used to produce
+  // an *outdoor* screenshot under an indoor filename, which is the worst kind
+  // of QA failure: it passes.
+  if (s.leave) {
+    await page.evaluate(() => window.game.leave());
+    await page.waitForTimeout(400);
+  }
   await page.evaluate((s) => {
     const g = window.game;
-    if (s.leave) g.leave();
     if (s.time !== undefined) g.setTime(s.time);
     if (s.warp) g.warp(s.warp[0], s.warp[1]);
     if (s.enter) g.enter(s.enter, s.seed ?? 1);
   }, s);
   await page.waitForTimeout(s.wait ?? (s.enter ? 1400 : 900));
+
+  // Verify the frame is of what was asked for, before it is written to a file
+  // under a name that claims it is. This catches both a transition that
+  // silently did not happen and a mid-run Vite reload, which drops the game
+  // back outdoors at its boot defaults.
+  const got = await page.evaluate(() => window.game.state());
+  const want = s.enter ?? null;
+  if (want !== null && got.room !== want) {
+    console.log(`SUSPECT ${s.name}: asked for room "${want}", got "${got.room}"`);
+  } else if (want === null && got.room !== null) {
+    console.log(`SUSPECT ${s.name}: asked for the overworld, got room "${got.room}"`);
+  }
+
   await page.locator('#screen').screenshot({ path: `${OUT}/${s.name}.png` });
   console.log('shot', s.name);
 }
