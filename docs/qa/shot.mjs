@@ -44,8 +44,8 @@ page.on('console', (m) => {
 await page.goto(URL, { waitUntil: 'load' });
 await page.waitForFunction(() => window.game, null, { timeout: 30000 });
 await page.waitForTimeout(600);
-await page.keyboard.press('h'); // 收起调试帮助面板，它盖住三分之一画面
-await page.waitForTimeout(200);
+// 不要在这里按 h。M01 之后 `showHelp` 默认就是 false，再按一次是把面板*打开*，
+// 每张验收截图的左三分之一都会被键位表盖住。
 
 for (const s of SHOTS) {
   await page.evaluate((s) => {
