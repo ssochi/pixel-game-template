@@ -30,7 +30,7 @@ import {
 import { P, R, type Ramp } from '../art/palette';
 import { bayer, PixelBuffer } from '../art/pixel';
 import { clip, type Clip, type Sheet } from '../art/sheet';
-import { hash2, RNG } from '../engine/rng';
+import { fbm, hash2, RNG } from '../engine/rng';
 import { GAME_H, GAME_W } from '../engine/screen';
 import type { Light } from './lighting';
 import type { Deco, Solid } from './scene';
@@ -300,38 +300,49 @@ export class RoomBuilder {
 
     b.fill(R.night[0]);
 
-    // Band 3: one step up close to the building, dithered out over 20px. The
+    // Band 3: one step up close to the building, thinning out over 26px. The
     // wall has to sit against *something* or its outer face is invisible.
-    const reach = 20;
+    //
+    // Thresholded against value noise rather than against `bayer`: an ordered
+    // dither run across a third of the screen is a flat 50% checkerboard, which
+    // is the screen-door texture the style rules exist to keep out. Noise
+    // breaks the same falloff into patches of ground instead.
+    const reach = 26;
     for (let y = 0; y < b.h; y++) {
       for (let x = 0; x < b.w; x++) {
         const d = out(x, y);
         if (d <= shell) continue;
         const t = 1 - (d - shell) / reach;
-        if (t > 0 && t > bayer(x, y)) b.set(x, y, R.night[1]);
+        if (t > 0 && fbm(x * 0.09, y * 0.09) < t * 0.8) b.set(x, y, R.night[1]);
       }
     }
 
     // Band 4: rubble. Clusters of two or three, never single pixels — a spray
     // of lone dots reads as dirt on the screen rather than as ground.
-    const clusters = Math.round((b.w * b.h) / 3400);
+    const clusters = Math.round((b.w * b.h) / 2600);
     for (let i = 0; i < clusters; i++) {
       const px = rng.int(2, b.w - 3);
       const py = rng.int(2, b.h - 3);
-      if (out(px, py) < shell + reach * 0.5) continue;
-      const core = rng.chance(0.25) ? R.night[2] : R.night[1];
+      if (out(px, py) < shell + 6) continue;
+      const core = rng.chance(0.35) ? R.night[2] : R.night[1];
       b.set(px, py, core);
       b.set(px + rng.int(-1, 1), py + 1, R.night[1]);
       if (rng.chance(0.5)) b.set(px + rng.int(0, 1), py - 1, R.night[1]);
     }
 
-    // Bands 1 and 2: the wall itself.
+    // Bands 1 and 2: the wall itself. The whole cross-section is kept a step
+    // or two below the material's base tone — the lamps are *inside*, and a
+    // band of full-value masonry right round the picture reads as a mount round
+    // a photograph rather than as something the room is built out of.
     for (let y = y0 - shell; y <= y1 + shell; y++) {
       for (let x = x0 - shell; x <= x1 + shell; x++) {
         const d = out(x, y);
         if (d <= 0 || d > shell) continue;
         if (d > WALL_T) {
-          b.set(x, y, mat[0]);
+          // Band 2: not more wall but the wall's own shadow, thrown outward
+          // onto the ground — which is why the falloff outside it starts one
+          // step *up* and this line stays at the bottom of the ramp.
+          b.set(x, y, R.night[0]);
           continue;
         }
         // Coursing runs along the wall, so the run direction depends on which
@@ -339,8 +350,8 @@ export class RoomBuilder {
         const along = y < y0 || y > y1 ? x : y;
         // Joints stagger between the inner and outer courses.
         const joint = (along + (d > 1 ? 6 : 0)) % 11 === 0;
-        let c = joint ? mat[0] : d === 1 ? mat[2] : mat[1];
-        if (!joint && hash2(along >> 1, d) > 0.86) c = d === 1 ? mat[3] : mat[2];
+        let c = joint || d === WALL_T ? mat[0] : mat[1];
+        if (!joint && hash2(along >> 1, d) > 0.86) c = d === 1 ? mat[2] : mat[0];
         b.set(x, y, c);
       }
     }

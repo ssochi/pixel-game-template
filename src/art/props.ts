@@ -234,44 +234,46 @@ export function bed(): PixelBuffer {
   b.vline(21, 17, 31, P.coatDark);
   // Folds. A blanket over a sleeper falls in ridges running *along* the body,
   // and a ridge at this scale is two adjacent ramp steps meeting on a hard
-  // line: the left flank of the ridge faces the key light, the right flank
-  // faces away. No gradient, and never a straight line — each crease wanders a
-  // pixel as it runs, which is the only thing separating a fold from a stripe.
-  const fold = new RNG(77);
-  for (const start of [7, 12, 17]) {
-    let fx = start;
-    for (let y = 20; y < 31; y++) {
-      if (fold.chance(0.28)) fx += fold.chance(0.5) ? 1 : -1;
-      fx = Math.max(6, Math.min(19, fx));
-      b.set(fx, y, P.coatLight);
-      b.set(fx + 1, y, P.coatDark);
+  // line: the flank facing the key light takes the step up, the flank facing
+  // away takes the step down. No gradient — and, it turns out, no randomness
+  // either. Letting each crease drift a pixel at random as it ran put a
+  // scribble on the blanket, because three 2px creases free to stray three
+  // pixels each will cross, and crossing creases read as damage. Three evenly
+  // spaced creases with a fourth laid across them read as a window pane. So:
+  // *two* long creases, each with a single kink, at unequal spacing and unequal
+  // length. Irregular is what stops a set of lines becoming a grid.
+  for (const [fx, top, bot, kink, dir] of [
+    [8, 21, 31, 26, 1],
+    [15, 19, 27, 24, -1],
+  ] as [number, number, number, number, number][]) {
+    for (let y = top; y <= bot; y++) {
+      const x = fx + (y >= kink ? dir : 0);
+      b.set(x, y, P.coatLight);
+      b.set(x + 1, y, P.coatDark);
     }
   }
-  // One cross fold where the blanket bunches over the knees, broken so it does
-  // not read as a seam sewn across the bed.
-  for (let x = 5; x < 21; x++) {
-    if (x > 12 && x < 15) continue;
-    const wob = x % 7 === 3 ? 1 : 0;
-    b.set(x, 26 + wob, P.coatLight);
-    b.set(x, 27 + wob, P.coatDark);
+  // The bunch over the knees: a short cross fold on one side only, running out
+  // where the long crease crosses it.
+  for (let x = 12; x < 21; x++) {
+    b.set(x, 29, P.coatLight);
+    b.set(x, 30, P.coatDark);
   }
-  // The blanket hangs over the side rails. Two pixels of overhang on the left,
-  // one on the right, with a ragged foot — a coverlet cut exactly to the frame
-  // is a fitted panel, not bedding.
-  for (let y = 22; y < 31; y++) {
-    b.set(3, y, P.coat);
-    if (y > 23 && y < 29) b.set(2, y, P.coatDark);
-    b.set(22, y, P.coatDark);
-  }
+  // The blanket laps over the side rails — one pixel of the two the rail is
+  // wide, so it covers the frame without breaking the bed's silhouette. Taking
+  // it two pixels out put a blue lug on the side of the bed that the sel-out
+  // then drew a line round, and the bed grew a handle.
+  b.vline(3, 21, 31, P.coat);
+  b.vline(22, 23, 31, P.coatDark);
   b.set(3, 21, P.coatLight);
   b.hline(4, 21, 31, P.coatDark);
   // The sheet turned down at the foot — the white band that says "bed".
   b.fillRect(4, 32, 18, 2, R.paper[4]);
   b.hline(4, 21, 33, R.paper[2]);
-  // Two corners of the blanket dropped past the turned-down sheet, so the hem
-  // between them is a broken line rather than a ruled one.
-  b.hline(6, 10, 32, P.coatDark);
-  b.hline(15, 18, 32, P.coatDark);
+  // One corner of the blanket flopped over the turned-down sheet, so the hem
+  // between them is not a ruled line. Two of them left the foot of the bed
+  // looking like a row of teeth.
+  b.hline(13, 20, 32, P.coatDark);
+  b.set(12, 32, P.coat);
   b.selOutline();
   return b;
 }

@@ -28,34 +28,60 @@ const clampStep = (s: number): number => (s < 0 ? 0 : s > 4 ? 4 : s);
  *
  * The old floor was one board length — the whole room — repeated at a perfect
  * 10px pitch with a bright arris on every course, so from the left wall to the
- * right wall it was a run of evenly spaced light/dark stripes. That is a deck,
- * not a floor. Boards come out of a stack in whatever lengths the sawyer had:
- * every course is cut into 12-28px runs, each course starts part-way into a
- * board so the butt joints never line up with the course above, and each run
- * gets its own tone a step either side of the base. `lit` is what breaks the
- * last of the periodicity: only about half the boards take a lit top arris, so
- * the eye stops finding a rhythm to lock onto.
+ * right wall it was a run of evenly spaced light/dark stripes. That is a deck.
+ * Boards come out of a stack in whatever lengths the sawyer had: every course is
+ * cut into 26-64px runs, each course starts part-way into a board, and no butt
+ * joint ever lines up with the one above.
+ *
+ * Three things here are the difference between a floor and *brickwork*, which is
+ * what the first two attempts produced and what the original author of this
+ * function hit as well:
+ *
+ *  - Boards are long. A 20px run in a 10px course has a brick's proportions, and
+ *    proportion is most of what the eye is classifying.
+ *  - The butt joint is **partial** — it runs the middle six rows only, so the
+ *    rectangle never closes. A joint that meets the course seam at both ends is
+ *    mortar, and mortar all round a colour is a brick whatever you call it.
+ *  - Almost every board keeps the base tone. What varies board to board is the
+ *    *grain*: one or two short streaks a step down, running along the length,
+ *    which is how you can tell a floorboard from a step in a colour ramp.
  */
-function plankLayout(w: number, courses: number, base: number): { tone: Int8Array; flag: Uint8Array } {
+interface PlankLayout {
+  tone: Int8Array;
+  joint: Uint8Array;
+  /** Row (2..8) that carries a grain streak in this column, 0 for none. */
+  grainA: Uint8Array;
+  grainB: Uint8Array;
+}
+
+function plankLayout(w: number, courses: number, base: number): PlankLayout {
   const tone = new Int8Array(courses * w);
-  const flag = new Uint8Array(courses * w);
+  const joint = new Uint8Array(courses * w);
+  const grainA = new Uint8Array(courses * w);
+  const grainB = new Uint8Array(courses * w);
   for (let bi = 0; bi < courses; bi++) {
     const rng = new RNG((base + bi) * 9176 + 37);
-    let x = -rng.int(2, 26);
+    let x = -rng.int(4, 60);
     while (x < w) {
-      const len = rng.int(12, 28);
-      const t = rng.int(-1, 1);
-      const lit = rng.chance(0.45) ? 2 : 0;
+      const len = rng.int(26, 64);
+      const roll = rng.next();
+      const t = roll > 0.95 ? 1 : roll > 0.88 ? -1 : 0;
       const end = Math.min(w, x + len);
-      for (let i = Math.max(0, x); i < end; i++) {
-        tone[bi * w + i] = t;
-        flag[bi * w + i] = lit;
+      for (let i = Math.max(0, x); i < end; i++) tone[bi * w + i] = t;
+      // Tight joints are invisible in a real floor; only some have opened up.
+      if (x >= 0 && x < w && rng.chance(0.7)) joint[bi * w + x] = 1;
+      for (let s = 0; s < 2; s++) {
+        if (s === 1 && rng.chance(0.45)) break;
+        const g = s === 0 ? grainA : grainB;
+        const gl = rng.int(6, 18);
+        const gx = x + rng.int(1, Math.max(2, len - gl - 1));
+        const gy = rng.int(2, 8);
+        for (let i = Math.max(0, gx); i < Math.min(w, gx + gl); i++) g[bi * w + i] = gy;
       }
-      if (x >= 0 && x < w) flag[bi * w + x] |= 1; // butt joint
       x += len;
     }
   }
-  return { tone, flag };
+  return { tone, joint, grainA, grainB };
 }
 
 /**
@@ -103,17 +129,15 @@ export function paintFloor(b: PixelBuffer, x0: number, y0: number, w: number, h:
         const course = Math.floor(j / BOARD_H);
         const within = j - course * BOARD_H;
         const k = course * w + i;
-        const flag = plank.flag[k];
         let step = 2 + plank.tone[k];
         // One dark pixel between courses, and that is the whole seam — the old
         // floor put a dark row *and* a second dark row nine pixels later, which
         // is what banded the room.
         if (within === 0) step -= 1;
-        else if (within === 1 && (flag & 2) !== 0) step += 1;
-        // The butt joint: a single dark pixel down the end of the board.
-        if (within > 0 && (flag & 1) !== 0) step -= 1;
-        // Grain and knots, in 2px streaks rather than single specks.
-        else if (within > 1 && hash2(x >> 1, y * 3 + course) > 0.955) step -= 1;
+        // The butt joint, over the middle of the board's height only.
+        else if (within >= 2 && within <= 7 && plank.joint[k] === 1) step -= 1;
+        else if (within === plank.grainA[k] || within === plank.grainB[k]) step -= 1;
+        else if (hash2(x >> 1, y * 3 + course) > 0.986) step -= 1; // knot
         c = R.wood[clampStep(step)];
       } else if (kind === 'tile' && tileX && tileY) {
         const ti = tileX.idx[i];
@@ -125,11 +149,14 @@ export function paintFloor(b: PixelBuffer, x0: number, y0: number, w: number, h:
         const n = hash2(ti, tj);
         // Base chequer, with a few flags out of a different batch.
         let step = (ti + tj) % 2 === 0 ? 3 : 2;
-        if (n > 0.88) step += 1;
-        else if (n < 0.18) step -= 1;
+        if (n > 0.91) step += 1;
+        else if (n < 0.2) step -= 1;
         if (lx === 0 || ly === 0) step = 1; // 1px joint
-        else if ((lx === 1 || ly === 1) && n > 0.38) step += 1; // lit arris, not on every flag
-        else if (rx === 0 || ry === 0) step -= 1;
+        // A bevel on every single flag turns the floor into a tray of buttons,
+        // so only some of them catch the light and only some drop a shaded far
+        // edge — the two never on the same flag.
+        else if ((lx === 1 || ly === 1) && n > 0.62) step += 1;
+        else if ((rx === 0 || ry === 0) && n < 0.62) step -= 1;
         // Chipped corners. A floor this old with not one broken flag in it is
         // the giveaway that nobody laid it.
         const chip = hash2(ti * 7 + 3, tj * 11 + 5);
@@ -714,14 +741,14 @@ export function roomRug(w: number, h: number, ramp: Ramp, seed = 1): PixelBuffer
   const medH = w >= 40 ? 9 : 5;
   const mx0 = Math.round((w - medW) / 2);
   const my0 = Math.round((h - medH) / 2);
-  const cell = 7;
+  const cell = 8;
   for (let cy = y0 + 1; cy < y1 - 2; cy += cell) {
     for (let cx = 1; cx < w - 3; cx += cell) {
-      const px = cx + rng.int(0, 2);
-      const py = cy + rng.int(0, 2);
-      // A quarter of the cells stay bare. The negative space is what stops the
+      const px = cx + rng.int(0, 3);
+      const py = cy + rng.int(0, 3);
+      // A third of the cells stay bare. The negative space is what stops the
       // figures joining up into a second flat colour.
-      if (rng.chance(0.26)) continue;
+      if (rng.chance(0.32)) continue;
       // Keep clear of the medallion, with a ring of plain ground round it.
       if (px > mx0 - 4 && px < mx0 + medW + 2 && py > my0 - 4 && py < my0 + medH + 2) continue;
       const m = rng.pick(RUG_MOTIFS);
@@ -748,11 +775,14 @@ export function roomRug(w: number, h: number, ramp: Ramp, seed = 1): PixelBuffer
   for (let y = y0; y <= y1; y++) {
     for (let x = 0; x < w; x++) {
       const d = Math.hypot((x - ccx) / (w * 0.42), (y - ccy) / (h * 0.42));
-      if (d < 1) {
-        if (d > 0.55 && bayer(x, y) > (1 - d) / 0.45) continue;
+      // Rule 5: the worn area is a flat plateau and only the narrow band where
+      // it runs out is dithered. Dithering the whole rug turns the pile into a
+      // sheet of screen-door mesh, which is the one thing worse than flat.
+      if (d < 0.78) {
+        if (d > 0.5 && bayer(x, y) > (0.78 - d) / 0.28) continue;
         b.set(x, y, shade(b.get(x, y), 0.32));
-      } else if (d > 1.15) {
-        if (bayer(x, y) > (d - 1.15) * 1.6) continue;
+      } else if (d > 1.18) {
+        if (d < 1.42 && bayer(x, y) > (d - 1.18) / 0.24) continue;
         b.set(x, y, shade(b.get(x, y), -0.32));
       }
     }
@@ -1815,9 +1845,10 @@ export function pew(w: number): PixelBuffer {
   for (const ux of [4, w - 7]) b.fillRect(ux, 9, 3, 3, R.wood[0]);
   // The gap between back and seat — the pew's only negative space, and the
   // reason the eye reads two surfaces meeting rather than one board over
-  // another.
+  // another. One pixel of true shadow and one of timber in shade: two rows of
+  // ink here reads as a slot cut through the bench.
   b.hline(0, w - 1, 10, R.night[1]);
-  b.hline(0, w - 1, 11, R.night[0]);
+  b.hline(0, w - 1, 11, R.wood[0]);
   // --- Seat: the horizontal face, so it is the lit one --------------------
   b.fillRect(0, 12, w, 6, R.wood[3]);
   b.hline(0, w - 1, 12, R.wood[4]); // far arris
