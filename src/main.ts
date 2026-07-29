@@ -446,7 +446,10 @@ function start(): void {
       player.indoors = true;
       player.stop();
       // Smoke and dust have to die at the walls; a room is not open sky.
-      fx.setBounds({ x0: 0, y0: 0, x1: room.w, y1: room.h });
+      // `room.bounds`, not `room.w/h`: since the room gained a painted surround
+      // the bitmap is bigger than the space you can stand in, so measuring
+      // against it would let hearth smoke drift out through the masonry.
+      fx.setBounds({ ...room.bounds });
       roomVillagers = room.npcs.map((n, i) => {
         const area = { x0: n.x - 10, y0: n.y - 4, x1: n.x + 10, y1: n.y + 4 };
         const def = n.cast ? castOf.get(n.cast) : undefined;
